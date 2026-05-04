@@ -14,5 +14,6 @@ __pycache__
 .DS_Store
 README.md
 docs
+# scripts/ stays out of the image — they're for the operator to copy onto the VM.
 scripts
-migrations
+# migrations/ DOES go into the image — `entrypoint.sh migrate` reads them at deploy time.

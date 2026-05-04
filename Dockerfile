@@ -1,6 +1,6 @@
 FROM python:3.12-slim-bookworm
 
-# System updates + minimal runtime deps. Non-root user for safety.
+# Runtime deps + non-root user
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl \
  && apt-get clean \
@@ -9,19 +9,28 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Install deps separately so docker layer caches dep install when source changes
+# Install Python deps separately so the layer caches when source changes
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# App source
 COPY app/ ./app/
+
+# Migrations ship with the image. The container can run them via:
+#   docker run --rm <image> migrate
+COPY migrations/ ./migrations/
+
+# Entry script — branches between `serve`, `migrate`, or arbitrary commands
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
 
 USER app
 
-# Container listens on 8000; host publishes to 127.0.0.1:8002 (not exposed publicly)
 EXPOSE 8000
 
-# Healthcheck — used by `docker ps` STATUS column
+# Healthcheck — observable via `docker ps` STATUS
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -fs http://127.0.0.1:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["serve"]
