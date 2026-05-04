@@ -93,33 +93,77 @@ ENV=dev uvicorn app.main:app --reload --port 8002
 
 ## First-time deployment to the VM
 
-You do this once, ever.
+The image is **published to GHCR as a private package**. The VM authenticates with a fine-grained Personal Access Token (PAT). Setup is one-time.
+
+### Step 1 — Create a fine-grained PAT (browser, ~2 min)
+
+Open https://github.com/settings/personal-access-tokens/new and configure:
+
+| Field | Value |
+|---|---|
+| Token name | `sypher-vm-ghcr-pull` |
+| Resource owner | `TheBharathProject` |
+| Expiration | 1 year (set a calendar reminder to rotate) |
+| Repository access | "Only select repositories" → `sypher-api` |
+| **Permissions → Account permissions** | (none needed) |
+| **Permissions → Repository permissions** | (none needed) |
+| **Permissions → Organization permissions** | (none needed) |
+
+For the package read scope, you actually need a **classic** token, not fine-grained — GHCR predates fine-grained PATs and only honors classic `read:packages` scope on private packages.
+
+So instead, create a **classic token** at https://github.com/settings/tokens/new:
+
+| Field | Value |
+|---|---|
+| Note | `sypher-vm-ghcr-pull` |
+| Expiration | 1 year |
+| Scopes | only `read:packages` (do not check anything else) |
+
+Copy the `ghp_…` token — you'll only see it once.
+
+### Step 2 — Put the token + your username on the VM
 
 ```bash
 ssh sypher-vm
 
-# 1. Make the package public (one-time)
-#    Go to https://github.com/orgs/TheBharathProject/packages/container/sypher-api/settings
-#    → Danger Zone → Change visibility → Public
-#    (Otherwise the VM needs a PAT to pull. Public is simplest for OSS-style repos.)
+cat > ~/.ghcr-auth <<EOF
+GHCR_USERNAME=<your-github-username>
+GHCR_TOKEN=ghp_<the-token-you-just-copied>
+EOF
+chmod 600 ~/.ghcr-auth
+```
 
-# 2. Drop the deploy script onto the VM and make it executable
+`~/.ghcr-auth` is a separate file from `~/.pg-secret` — keeps GHCR auth concerns separate from DB concerns.
+
+### Step 3 — Drop `deploy.sh` onto the VM (one-time)
+
+```bash
 mkdir -p ~/services/sypher-api
 curl -fsSL https://raw.githubusercontent.com/TheBharathProject/sypher-api/main/scripts/deploy.sh \
   -o ~/services/sypher-api/deploy.sh
 chmod +x ~/services/sypher-api/deploy.sh
+```
 
-# 3. Make sure ~/.pg-secret has the three required vars
+If the `sypher-api` repo itself is private, you'll need a token for `raw.githubusercontent.com` too — or just `scp` the script from your Mac. Easiest: keep the repo public (no secrets in code) and only the **package** private.
+
+### Step 4 — Verify `~/.pg-secret` has the three DB vars
+
+```bash
 cat ~/.pg-secret
 # Must contain:
 #   POSTGRES_PASSWORD=...
 #   DATABASE_URL=postgresql://sypher:...@127.0.0.1:5432/sypher
 #   WAITLIST_API_KEY=...      (openssl rand -hex 32)
 #   IP_SALT=...               (openssl rand -hex 16)
+```
 
-# 4. Run it
+### Step 5 — Run it
+
+```bash
 bash ~/services/sypher-api/deploy.sh
 ```
+
+The script will: `docker login ghcr.io` (idempotent) → pull → migrate → replace container → probe `/health`. Credentials get cached in `~/.docker/config.json` after first login, so subsequent pulls are silent.
 
 ## Subsequent deploys
 
@@ -172,6 +216,18 @@ docker inspect sypher-api --format '{{range .Config.Env}}{{println .}}{{end}}' |
 # one-off psql via the running Postgres container
 docker exec -it sypher-postgres psql -U sypher -d sypher
 ```
+
+### GHCR token rotation
+
+The PAT in `~/.ghcr-auth` expires in 1 year by default. Before that:
+
+1. Create a new classic PAT with `read:packages` scope at https://github.com/settings/tokens
+2. Update `~/.ghcr-auth` with the new token
+3. `docker logout ghcr.io` to clear cached creds
+4. Run `bash ~/services/sypher-api/deploy.sh` — login uses the new token, deploy proceeds normally
+5. Delete the old PAT in the GitHub UI
+
+Set a calendar reminder when you create the token. Expired tokens are silent; the next deploy will fail with `unauthorized` and be confusing if you don't expect it.
 
 ## What this service is NOT
 
