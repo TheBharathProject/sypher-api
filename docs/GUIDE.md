@@ -66,7 +66,7 @@ If a single tool ever genuinely needs to scale or fail differently — extract i
                      │ (Docker)         │  listens on 0.0.0.0:8000 inside
                      └────────┬─────────┘
                               │
-                              ▼  pgxpool over host.docker.internal:5432
+                              ▼  pgxpool over postgres:5432  (sypher-net Docker network)
                      ┌──────────────────┐
                      │ sypher-postgres  │  Postgres 18 (Docker)
                      │ (Docker)         │  data in ~/pg-data
