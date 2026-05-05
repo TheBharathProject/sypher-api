@@ -1,19 +1,24 @@
 .git
 .github
-.venv
-venv
-__pycache__
-*.pyc
-*.pyo
+.idea
+.vscode
+.DS_Store
+*.swp
+
+# Local dev state
 .env
 .env.*
 !.env.example
-.pytest_cache
-.mypy_cache
-.ruff_cache
-.DS_Store
+
+# Build artifacts (only need source for the docker build)
+bin/
+dist/
+tmp/
+
+# Tests
+*_test.go
+
+# Operator-only files
 README.md
 docs
-# scripts/ stays out of the image — they're for the operator to copy onto the VM.
 scripts
-# migrations/ DOES go into the image — `entrypoint.sh migrate` reads them at deploy time.

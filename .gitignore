@@ -1,25 +1,22 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+# Build output
+bin/
+dist/
+tmp/
+*.out
 
-.venv/
-venv/
-env/
-
+# Local env
 .env
 .env.*
 !.env.example
 
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-coverage.xml
-htmlcov/
-
-.DS_Store
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
+
+# OS
+.DS_Store
+
+# Coverage
+coverage.out
+coverage.html

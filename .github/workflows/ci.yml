@@ -14,49 +14,47 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/sypher-api
 
 jobs:
-  # ————————————————————————————————————————————————
-  # Always run on PRs and main: lint + import-check + amd64 build
-  # (cheap sanity check; doesn't push)
-  # ————————————————————————————————————————————————
-  lint-and-build:
+  # ─────────────────────────────────────────────────────────────
+  # Always: vet + build + (cheap amd64) docker build smoke
+  # ─────────────────────────────────────────────────────────────
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
-          cache: pip
+          go-version: "1.25"
+          cache: true
 
-      - name: Install
+      - name: Verify mod tidy
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
-      - name: Lint
-        run: ruff check app/
+      - name: go vet
+        run: go vet ./...
 
-      - name: Import-check (catches obvious wiring bugs)
-        env:
-          DATABASE_URL: postgresql://x:y@127.0.0.1:5432/z
-          WAITLIST_API_KEY: ci-test
-          IP_SALT: ci-test
-        run: python -c "from app.main import app; print('imports ok:', app.title)"
+      - name: go build
+        run: |
+          go build -o /tmp/api ./cmd/api
+          go build -o /tmp/migrate ./cmd/migrate
 
-      - name: Docker build (amd64 only — fast smoke check)
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      - name: Docker build (amd64 smoke)
         run: docker build -t sypher-api:ci .
 
-  # ————————————————————————————————————————————————
-  # Only on push to main: build multi-arch (amd64 + arm64) and publish
-  # to GHCR. The OCI VM is arm64, so arm64 is required.
-  # ————————————————————————————————————————————————
+  # ─────────────────────────────────────────────────────────────
+  # Only on main: multi-arch build + GHCR push
+  # ─────────────────────────────────────────────────────────────
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: lint-and-build
+    needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
