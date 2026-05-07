@@ -29,6 +29,29 @@ type Config struct {
 	Env             string        // "dev" | "prod"
 	HTTPListenAddr  string        // ":8000" inside the container
 	ShutdownTimeout time.Duration // wait this long for in-flight requests on SIGTERM
+
+	// Auth — Google OAuth + JWT (used by internal/auth).
+	GoogleOAuthClientID     string
+	GoogleOAuthClientSecret string
+	GoogleOAuthRedirectURL  string
+	JWTSecret               string
+	JWTIssuer               string
+	JWTAudience             string
+	JWTTTL                  time.Duration
+	FrontendLoginRedirect   string
+
+	// Storage — Cloudflare R2 (used by internal/storage). Optional in Phase 1.
+	R2AccountID       string
+	R2AccessKeyID     string
+	R2SecretAccessKey string
+	R2Bucket          string
+	R2PublicURL       string
+
+	// AI — Deepseek (used by internal/ai). Optional in Phase 1.
+	DeepseekAPIKey            string
+	DeepseekBaseURL           string
+	DeepseekModel             string
+	AIUsageMonthlyTokenLimit  int64
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -51,14 +74,45 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err)
 	}
 
+	jwtTTL, err := time.ParseDuration(envWithDefault("JWT_TTL", "168h"))
+	if err != nil {
+		return nil, fmt.Errorf("JWT_TTL: %w", err)
+	}
+
+	aiLimit, err := parseInt64(envWithDefault("AI_USAGE_MONTHLY_TOKEN_LIMIT", "1000000"))
+	if err != nil {
+		return nil, fmt.Errorf("AI_USAGE_MONTHLY_TOKEN_LIMIT: %w", err)
+	}
+
 	cfg := &Config{
 		DatabaseURL:     required("DATABASE_URL"),
 		WaitlistAPIKey:  required("WAITLIST_API_KEY"),
 		IPSalt:          envWithDefault("IP_SALT", "change-me-please"),
-		CORSOrigins:     splitCSV(envWithDefault("CORS_ORIGINS", "https://sypher.in,https://www.sypher.in")),
+		CORSOrigins:     splitCSV(envWithDefault("CORS_ORIGINS", "https://sypher.in,https://www.sypher.in,http://localhost:3000")),
 		Env:             envWithDefault("ENV", "prod"),
 		HTTPListenAddr:  envWithDefault("HTTP_LISTEN_ADDR", ":8000"),
 		ShutdownTimeout: shutdown,
+
+		GoogleOAuthClientID:     required("GOOGLE_OAUTH_CLIENT_ID"),
+		GoogleOAuthClientSecret: required("GOOGLE_OAUTH_CLIENT_SECRET"),
+		GoogleOAuthRedirectURL:  required("GOOGLE_OAUTH_REDIRECT_URL"),
+		JWTSecret:               required("JWT_SECRET"),
+		JWTIssuer:               envWithDefault("JWT_ISSUER", "sypher.in"),
+		JWTAudience:             envWithDefault("JWT_AUDIENCE", "sypher.in"),
+		JWTTTL:                  jwtTTL,
+		FrontendLoginRedirect:   required("FRONTEND_LOGIN_REDIRECT_URL"),
+
+		// Optional in Phase 1 — only required when Phase 2 endpoints are hit.
+		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2Bucket:          os.Getenv("R2_BUCKET"),
+		R2PublicURL:       os.Getenv("R2_PUBLIC_URL"),
+
+		DeepseekAPIKey:           os.Getenv("DEEPSEEK_API_KEY"),
+		DeepseekBaseURL:          envWithDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+		DeepseekModel:            envWithDefault("DEEPSEEK_MODEL", "deepseek-chat"),
+		AIUsageMonthlyTokenLimit: aiLimit,
 	}
 
 	if len(missing) > 0 {
@@ -88,4 +142,15 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseInt64(s string) (int64, error) {
+	var v int64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("not a positive integer: %q", s)
+		}
+		v = v*10 + int64(c-'0')
+	}
+	return v, nil
 }

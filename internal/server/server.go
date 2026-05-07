@@ -9,9 +9,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/TheBharathProject/sypher-api/internal/ai"
+	"github.com/TheBharathProject/sypher-api/internal/auth"
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/health"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
+	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
+	"github.com/TheBharathProject/sypher-api/internal/storage"
 	"github.com/TheBharathProject/sypher-api/internal/waitlist"
 )
 
@@ -56,6 +60,52 @@ func (s *Server) routes() http.Handler {
 	wlHandler := waitlist.NewHandler(wlStore, s.cfg.IPSalt, s.logger)
 	mux.Handle("POST /waitlist", apiKey(wlHandler))
 
+	// Auth — Google OAuth + JWT issuance. Public OAuth start/callback,
+	// logout is also public (stateless JWT).
+	authStore := auth.NewStore(s.pool)
+	authHandler := auth.NewHandler(s.cfg, authStore, s.logger)
+
+	// Job-tracker tool — every endpoint behind RequireUser, except the
+	// public profile route which the tool registers itself.
+	requireUser := auth.RequireUser(s.cfg.JWTSecret, s.cfg.JWTIssuer, s.cfg.JWTAudience)
+	jtStore := jobtracker.NewStore(s.pool)
+	jtHandler := jobtracker.NewHandler(s.cfg, jtStore, authStore, s.logger)
+
+	// Have the OAuth callback eagerly provision a job-tracker profile +
+	// auto-pick a slug for new users. Visibility stays FALSE by default
+	// (schema), so the public route returns 404 until the user opts in.
+	authHandler.WithProvisioner(jtStore)
+
+	mux.HandleFunc("GET /auth/google", authHandler.GoogleStart)
+	mux.HandleFunc("GET /auth/google/callback", authHandler.GoogleCallback)
+	mux.HandleFunc("POST /auth/logout", authHandler.Logout)
+
+	// Phase 2: best-effort init of R2 + Deepseek. If creds aren't set, the
+	// related endpoints respond 503 instead of refusing to boot.
+	if r2, err := storage.New(context.Background(), storage.Settings{
+		AccountID:       s.cfg.R2AccountID,
+		AccessKeyID:     s.cfg.R2AccessKeyID,
+		SecretAccessKey: s.cfg.R2SecretAccessKey,
+		Bucket:          s.cfg.R2Bucket,
+	}); err == nil {
+		jtHandler.WithStorage(r2)
+		s.logger.Info("r2 storage configured", "bucket", s.cfg.R2Bucket)
+	} else {
+		s.logger.Info("r2 storage skipped", "reason", err.Error())
+	}
+	if aiClient, err := ai.New(ai.Settings{
+		APIKey:  s.cfg.DeepseekAPIKey,
+		BaseURL: s.cfg.DeepseekBaseURL,
+		Model:   s.cfg.DeepseekModel,
+	}); err == nil {
+		jtHandler.WithAI(aiClient, ai.NewUsageStore(s.pool, s.cfg.AIUsageMonthlyTokenLimit))
+		s.logger.Info("deepseek configured", "model", s.cfg.DeepseekModel)
+	} else {
+		s.logger.Info("deepseek skipped", "reason", err.Error())
+	}
+
+	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
+
 	// Compose middleware. Outer wrappers run first.
 	var h http.Handler = mux
 	h = withCORS(h, s.cfg.CORSOrigins)
@@ -67,7 +117,7 @@ func (s *Server) routes() http.Handler {
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"service": "sypher-api",
-		"version": "0.1.0",
+		"version": "0.2.0",
 		"status":  "ok",
 	})
 }
