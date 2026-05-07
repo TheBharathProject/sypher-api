@@ -12,7 +12,22 @@
 # Prerequisites on the VM:
 #   - Docker installed
 #   - sypher-postgres container running, name "sypher-postgres"
-#   - ~/.pg-secret  with DATABASE_URL, WAITLIST_API_KEY, IP_SALT
+#   - ~/.pg-secret  with:
+#       Required (api refuses to start without these):
+#         DATABASE_URL
+#         WAITLIST_API_KEY
+#         IP_SALT
+#         JWT_SECRET                       — long random; rotating evicts everyone
+#         GOOGLE_OAUTH_CLIENT_ID           — from Google Cloud Console
+#         GOOGLE_OAUTH_CLIENT_SECRET       — from Google Cloud Console
+#         GOOGLE_OAUTH_REDIRECT_URL        — https://api.sypher.in/auth/google/callback
+#         FRONTEND_LOGIN_REDIRECT_URL      — https://sypher.in/pegasus/auth/callback
+#       Optional but recommended (features quietly fail without them):
+#         R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL
+#         DEEPSEEK_API_KEY                 — without this, AI features 503
+#       Optional with sane defaults (override only if you know why):
+#         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
+#         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)
 #   - ~/.ghcr-auth  with GHCR_USERNAME, GHCR_TOKEN  (PAT with read:packages)
 #
 # Usage:
@@ -39,10 +54,49 @@ set -a
 . "$HOME/.ghcr-auth"
 set +a
 
-for v in DATABASE_URL WAITLIST_API_KEY IP_SALT GHCR_USERNAME GHCR_TOKEN; do
+# Required for the server to even boot — config.go calls required() on these.
+REQUIRED_VARS=(
+  DATABASE_URL
+  WAITLIST_API_KEY
+  IP_SALT
+  JWT_SECRET
+  GOOGLE_OAUTH_CLIENT_ID
+  GOOGLE_OAUTH_CLIENT_SECRET
+  GOOGLE_OAUTH_REDIRECT_URL
+  FRONTEND_LOGIN_REDIRECT_URL
+  GHCR_USERNAME
+  GHCR_TOKEN
+)
+for v in "${REQUIRED_VARS[@]}"; do
   if [ -z "${!v:-}" ]; then
     echo "!!! $v not set in secrets" >&2
     exit 1
+  fi
+done
+
+# Optional — features quietly degrade if missing. We forward whatever's set;
+# unset values become empty strings inside the container, which os.Getenv
+# returns as "" and the relevant feature checks for that.
+OPTIONAL_VARS=(
+  JWT_ISSUER
+  JWT_AUDIENCE
+  JWT_TTL
+  CORS_ORIGINS
+  AI_USAGE_MONTHLY_TOKEN_LIMIT
+  R2_ACCOUNT_ID
+  R2_ACCESS_KEY_ID
+  R2_SECRET_ACCESS_KEY
+  R2_BUCKET
+  R2_PUBLIC_URL
+  DEEPSEEK_API_KEY
+  DEEPSEEK_BASE_URL
+  DEEPSEEK_MODEL
+)
+
+# Warn (don't fail) on missing optionals so a half-configured deploy is loud.
+for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL DEEPSEEK_API_KEY; do
+  if [ -z "${!v:-}" ]; then
+    echo "??? $v unset — feature(s) depending on it will be degraded" >&2
   fi
 done
 
@@ -95,16 +149,38 @@ if docker ps -a --format '{{.Names}}' | grep -q '^sypher-api$'; then
   docker rm sypher-api >/dev/null
 fi
 
+# Build the -e arg list:
+#   - DATABASE_URL is rewritten so the container reaches Postgres via the
+#     `postgres` network alias instead of the host loopback.
+#   - ENV is hardcoded to prod here (the deploy script only ever runs on
+#     the prod VM; dev runs come from `go run` against .env, not this).
+#   - CORS_ORIGINS falls back to the prod default if not set in secrets.
+ENV_FLAGS=(
+  -e DATABASE_URL="$DB_URL_FOR_CONTAINER"
+  -e ENV="prod"
+)
+# Forward every required var (already validated non-empty above) by name —
+# `-e VAR` without a value tells Docker to inherit from the host process,
+# which we just sourced from ~/.pg-secret.
+for v in WAITLIST_API_KEY IP_SALT JWT_SECRET \
+         GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET \
+         GOOGLE_OAUTH_REDIRECT_URL FRONTEND_LOGIN_REDIRECT_URL; do
+  ENV_FLAGS+=( -e "$v" )
+done
+# Forward optionals only if set, so a totally-empty optional doesn't override
+# a default baked into config.go (e.g. CORS_ORIGINS, JWT_ISSUER).
+for v in "${OPTIONAL_VARS[@]}"; do
+  if [ -n "${!v:-}" ]; then
+    ENV_FLAGS+=( -e "$v" )
+  fi
+done
+
 echo ">>> starting new container"
 docker run -d \
   --name sypher-api \
   --restart unless-stopped \
   --network "$NETWORK" \
-  -e DATABASE_URL="$DB_URL_FOR_CONTAINER" \
-  -e WAITLIST_API_KEY="$WAITLIST_API_KEY" \
-  -e IP_SALT="$IP_SALT" \
-  -e CORS_ORIGINS="https://sypher.in,https://www.sypher.in" \
-  -e ENV="prod" \
+  "${ENV_FLAGS[@]}" \
   -p 127.0.0.1:8002:8000 \
   "$FULL" >/dev/null
 
