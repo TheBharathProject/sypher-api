@@ -103,7 +103,21 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/ai/cover-letter", h.GenerateCoverLetter)
 	g("GET", "/job-tracker/ai/usage", h.AIUsage)
 
+	// ----- Phase 3: community -----
+	g("GET", "/job-tracker/community/{surface}", h.ListCommunity)
+	g("POST", "/job-tracker/community/{surface}", h.CreateCommunityPost)
+	g("GET", "/job-tracker/community/posts/{id}", h.GetCommunityPost)
+	g("PATCH", "/job-tracker/community/posts/{id}", h.UpdateCommunityPost)
+	g("DELETE", "/job-tracker/community/posts/{id}", h.DeleteCommunityPost)
+	g("POST", "/job-tracker/community/posts/{id}/vote", h.VoteOnCommunityPost)
+	g("POST", "/job-tracker/community/posts/{id}/flag", h.FlagCommunityPost)
+	g("GET", "/job-tracker/community/posts/{id}/comments", h.ListCommunityComments)
+	g("POST", "/job-tracker/community/posts/{id}/comments", h.CreateCommunityComment)
+	g("DELETE", "/job-tracker/community/comments/{id}", h.DeleteCommunityComment)
+
 	// Public profile + analytics — NO auth middleware
 	mux.Handle("GET /job-tracker/public/profile/{slug}", http.HandlerFunc(h.PublicProfile))
 	mux.Handle("GET /job-tracker/public/analytics/{slug}", http.HandlerFunc(h.PublicAnalytics))
+	mux.Handle("GET /job-tracker/public/community/{surface}", http.HandlerFunc(h.PublicListCommunity))
+	mux.Handle("GET /job-tracker/public/community/posts/{id}", http.HandlerFunc(h.PublicGetCommunityPost))
 }
