@@ -18,8 +18,9 @@ COPY internal ./internal
 # final image — we can use a tiny base. -ldflags "-s -w" strips debug
 # symbols, shaving ~30% off the binary size.
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/api      ./cmd/api      && \
-    go build -trimpath -ldflags="-s -w" -o /out/migrate  ./cmd/migrate
+RUN go build -trimpath -ldflags="-s -w" -o /out/api        ./cmd/api        && \
+    go build -trimpath -ldflags="-s -w" -o /out/migrate    ./cmd/migrate    && \
+    go build -trimpath -ldflags="-s -w" -o /out/cron-once  ./cmd/cron-once
 
 # ─── stage 2: runtime ──────────────────────────────────────────────
 FROM alpine:3.20
@@ -32,8 +33,9 @@ RUN apk add --no-cache curl ca-certificates && \
 WORKDIR /app
 
 # Copy compiled binaries
-COPY --from=build /out/api      /usr/local/bin/api
-COPY --from=build /out/migrate  /usr/local/bin/migrate
+COPY --from=build /out/api        /usr/local/bin/api
+COPY --from=build /out/migrate    /usr/local/bin/migrate
+COPY --from=build /out/cron-once  /usr/local/bin/cron-once
 
 # Migrations ship inside the image — `migrate` reads /app/migrations
 COPY migrations ./migrations
