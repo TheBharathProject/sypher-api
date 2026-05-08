@@ -21,8 +21,24 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
+// userCols is the canonical column projection for auth.users — keep it in
+// one place so adding/renaming columns (like the 0009 premium fields) is a
+// single edit. Order MUST match scanUser below.
+const userCols = `id, google_id, email, name, COALESCE(picture_url, ''), timezone, is_premium, email_notifications_enabled`
+
+func scanUser(row pgx.Row, u *User) error {
+	return row.Scan(
+		&u.ID, &u.GoogleID, &u.Email, &u.Name, &u.PictureURL, &u.Timezone,
+		&u.IsPremium, &u.EmailNotificationsEnabled,
+	)
+}
+
 // UpsertUser inserts a new user (matching on google_id) or updates the
 // mutable profile fields (name, email, picture). Returns the resulting User.
+//
+// Note: is_premium + email_notifications_enabled use schema defaults on
+// insert, and ON CONFLICT DO UPDATE deliberately doesn't touch them — a
+// returning user keeps whatever opt-in state they previously had.
 func (s *Store) UpsertUser(ctx context.Context, googleID, email, name, picture string) (*User, error) {
 	const q = `
 		INSERT INTO auth.users (google_id, email, name, picture_url)
@@ -32,12 +48,9 @@ func (s *Store) UpsertUser(ctx context.Context, googleID, email, name, picture s
 			name = EXCLUDED.name,
 			picture_url = EXCLUDED.picture_url,
 			updated_at = NOW()
-		RETURNING id, google_id, email, name, COALESCE(picture_url, ''), timezone
-	`
+		RETURNING ` + userCols
 	var u User
-	err := s.pool.QueryRow(ctx, q, googleID, email, name, picture).
-		Scan(&u.ID, &u.GoogleID, &u.Email, &u.Name, &u.PictureURL, &u.Timezone)
-	if err != nil {
+	if err := scanUser(s.pool.QueryRow(ctx, q, googleID, email, name, picture), &u); err != nil {
 		return nil, fmt.Errorf("upsert user: %w", err)
 	}
 	return &u, nil
@@ -45,14 +58,39 @@ func (s *Store) UpsertUser(ctx context.Context, googleID, email, name, picture s
 
 // GetUserByID returns the user with the given UUID, or pgx.ErrNoRows.
 func (s *Store) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) {
-	const q = `
-		SELECT id, google_id, email, name, COALESCE(picture_url, ''), timezone
-		FROM auth.users WHERE id = $1
-	`
+	q := `SELECT ` + userCols + ` FROM auth.users WHERE id = $1`
 	var u User
-	err := s.pool.QueryRow(ctx, q, id).
-		Scan(&u.ID, &u.GoogleID, &u.Email, &u.Name, &u.PictureURL, &u.Timezone)
-	if err != nil {
+	if err := scanUser(s.pool.QueryRow(ctx, q, id), &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CanReceiveEmail returns true iff the user is premium AND has opt-in
+// enabled. Single round-trip; used at every email-send call site per
+// ADR-002 D3. Returns (false, nil) on pgx.ErrNoRows so a deleted user
+// silently fails-closed without bubbling the error.
+func (s *Store) CanReceiveEmail(ctx context.Context, id uuid.UUID) (bool, error) {
+	const q = `SELECT is_premium AND email_notifications_enabled FROM auth.users WHERE id = $1`
+	var ok bool
+	err := s.pool.QueryRow(ctx, q, id).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return ok, err
+}
+
+// SetEmailPref flips the per-user opt-in. Only callable for premium
+// users; the handler enforces that. Returns the updated User so callers
+// can echo it without a second SELECT.
+func (s *Store) SetEmailPref(ctx context.Context, id uuid.UUID, enabled bool) (*User, error) {
+	q := `
+		UPDATE auth.users
+		SET email_notifications_enabled = $1, updated_at = NOW()
+		WHERE id = $2
+		RETURNING ` + userCols
+	var u User
+	if err := scanUser(s.pool.QueryRow(ctx, q, enabled, id), &u); err != nil {
 		return nil, err
 	}
 	return &u, nil

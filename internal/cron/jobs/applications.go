@@ -134,13 +134,18 @@ func DailyApplicationDigest(
 				continue
 			}
 
-			// 2. Email — best-effort, async fire-and-forget so a slow Resend
-			// doesn't extend this loop. Per-send timeout lives inside Send.
+			// 2. Email — gated. Free users always get the in-app row above;
+			// only premium users with the opt-in toggle on get the email.
+			// See docs/adr/0002-premium-email-gating.md (D5).
 			//
-			// We don't goroutine here because we're already off the request
-			// path (this is the cron loop). Synchronous-but-bounded is
-			// simpler than chasing goroutine leaks.
-			if u.Email == "" {
+			// CanReceiveEmail is computed in SQL inside UsersForDigest so
+			// we don't round-trip again here. Empty Email is the same shape
+			// of skip (would never happen for a Google-OAuth user, but
+			// defensive nil-check).
+			if u.Email == "" || !u.CanReceiveEmail {
+				if !u.CanReceiveEmail {
+					logger.Info("cron digest: email skipped (not premium or opted out)", "user_id", u.UserID)
+				}
 				continue
 			}
 			items := make([]mailer.DigestItem, 0, len(u.Items))

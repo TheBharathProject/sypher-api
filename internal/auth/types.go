@@ -14,13 +14,20 @@ package auth
 import "github.com/google/uuid"
 
 // User is the identity record stored in auth.users.
+//
+// IsPremium and EmailNotificationsEnabled were added in migration 0009 as
+// part of the email-gating policy — see docs/adr/0002-premium-email-gating.md.
+// Both default false/true respectively at the schema level so existing rows
+// pre-migration get safe defaults without a backfill.
 type User struct {
-	ID         uuid.UUID `json:"id"`
-	GoogleID   string    `json:"-"`
-	Email      string    `json:"email"`
-	Name       string    `json:"name"`
-	PictureURL string    `json:"pictureUrl,omitempty"`
-	Timezone   string    `json:"timezone"`
+	ID                        uuid.UUID `json:"id"`
+	GoogleID                  string    `json:"-"`
+	Email                     string    `json:"email"`
+	Name                      string    `json:"name"`
+	PictureURL                string    `json:"pictureUrl,omitempty"`
+	Timezone                  string    `json:"timezone"`
+	IsPremium                 bool      `json:"isPremium"`
+	EmailNotificationsEnabled bool      `json:"emailNotificationsEnabled"`
 }
 
 // GoogleProfile is the subset of fields we read from Google's userinfo

@@ -92,6 +92,47 @@ func (h *Handler) IssueAPIToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type updateEmailPrefsInput struct {
+	Enabled bool `json:"enabled"`
+}
+
+// UpdateEmailPrefs flips the per-user email opt-in. Free users attempting
+// to enable get a 402 Payment Required — emails are a premium perk per
+// docs/adr/0002-premium-email-gating.md (D2/D4).
+//
+// Disabling is allowed for free users too (they're effectively already
+// disabled, but persisting their explicit choice prevents surprise emails
+// if they upgrade later — opt-in stays where they last left it).
+func (h *Handler) UpdateEmailPrefs(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	var in updateEmailPrefsInput
+	if !readJSON(w, r, &in) {
+		return
+	}
+
+	// Premium gate only fires when enabling. Free users can disable freely
+	// — that just stamps a more explicit "no thanks" on their row.
+	if in.Enabled {
+		u, err := h.authStore.GetUserByID(r.Context(), uid)
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		if !u.IsPremium {
+			httpx.WriteError(w, http.StatusPaymentRequired, "premium_required",
+				"Email notifications are a premium feature. Upgrade in Settings.")
+			return
+		}
+	}
+
+	updated, err := h.authStore.SetEmailPref(r.Context(), uid, in.Enabled)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, updated)
+}
+
 // DeleteAccount drops the user from auth.users; ON DELETE CASCADE on every
 // product table tears down everything they own (applications, notes,
 // resumes/cover-letters in DB metadata only — actual R2 objects live until

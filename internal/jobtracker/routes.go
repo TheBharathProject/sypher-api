@@ -16,6 +16,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("PATCH", "/job-tracker/me/timezone", h.UpdateTimezone)
 	g("POST", "/job-tracker/me/api-token", h.IssueAPIToken)
 	g("POST", "/job-tracker/me/delete", h.DeleteAccount)
+	g("PATCH", "/job-tracker/me/email-prefs", h.UpdateEmailPrefs)
 
 	// Notifications (Phase 2)
 	g("GET", "/job-tracker/notifications", h.ListNotifications)

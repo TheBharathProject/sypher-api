@@ -237,12 +237,17 @@ type StaleApplication struct {
 }
 
 // DigestUser is one user's worth of items for the daily digest. The cron
-// job iterates these and pushes one notification + one email per user.
+// job iterates these and pushes one notification per user, then sends an
+// email IFF CanReceiveEmail is true (premium + opt-in, see ADR-002 D5).
+//
+// CanReceiveEmail is computed in the SQL query rather than fetched
+// separately so we avoid a second DB round-trip per user.
 type DigestUser struct {
-	UserID uuid.UUID
-	Email  string
-	Name   string
-	Items  []DigestItem
+	UserID          uuid.UUID
+	Email           string
+	Name            string
+	CanReceiveEmail bool
+	Items           []DigestItem
 }
 
 // DigestItem is a single line in a user's digest. Reason is one of
@@ -300,11 +305,15 @@ func (s *Store) UsersForDigest(ctx context.Context, today time.Time, deadlineWin
 	// rather than the older `($2 || ' days')::INTERVAL` string-concat
 	// trick — that one expects $2 to be TEXT and pgx (correctly) refuses
 	// to cast int→text implicitly.
+	// `can_email` = is_premium AND email_notifications_enabled, computed
+	// in SQL so the cron loop avoids a second round-trip per user. See
+	// docs/adr/0002-premium-email-gating.md (D3).
 	const q = `
 		SELECT
 			a.id, a.user_id, a.company, a.role,
 			a.stale, a.apply_deadline, a.stage_changed_at,
-			u.email, u.name
+			u.email, u.name,
+			(u.is_premium AND u.email_notifications_enabled) AS can_email
 		FROM job_tracker.applications a
 		JOIN auth.users u ON u.id = a.user_id
 		WHERE a.stale = true
@@ -329,13 +338,14 @@ func (s *Store) UsersForDigest(ctx context.Context, today time.Time, deadlineWin
 			applyDeadline *time.Time
 			stageChanged  *time.Time
 			email, name   string
+			canEmail      bool
 		)
-		if err := rows.Scan(&appID, &userID, &company, &role, &stale, &applyDeadline, &stageChanged, &email, &name); err != nil {
+		if err := rows.Scan(&appID, &userID, &company, &role, &stale, &applyDeadline, &stageChanged, &email, &name, &canEmail); err != nil {
 			return nil, err
 		}
 		u, ok := usersByID[userID]
 		if !ok {
-			u = &DigestUser{UserID: userID, Email: email, Name: name, Items: []DigestItem{}}
+			u = &DigestUser{UserID: userID, Email: email, Name: name, CanReceiveEmail: canEmail, Items: []DigestItem{}}
 			usersByID[userID] = u
 			order = append(order, userID)
 		}
