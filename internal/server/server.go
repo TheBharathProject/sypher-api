@@ -12,9 +12,12 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
 	"github.com/TheBharathProject/sypher-api/internal/config"
+	"github.com/TheBharathProject/sypher-api/internal/cron"
+	"github.com/TheBharathProject/sypher-api/internal/cron/jobs"
 	"github.com/TheBharathProject/sypher-api/internal/health"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
+	"github.com/TheBharathProject/sypher-api/internal/mailer"
 	"github.com/TheBharathProject/sypher-api/internal/storage"
 	"github.com/TheBharathProject/sypher-api/internal/waitlist"
 )
@@ -27,6 +30,10 @@ type Server struct {
 	pool   *pgxpool.Pool
 	logger *slog.Logger
 	httpd  *http.Server
+	// cron is set during routes() so Start() can spawn it under the
+	// graceful-shutdown context. nil if no jobs are registered (kept
+	// nullable so future single-tenant builds can opt out).
+	cron *cron.Runner
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Server {
@@ -104,6 +111,27 @@ func (s *Server) routes() http.Handler {
 		s.logger.Info("deepseek skipped", "reason", err.Error())
 	}
 
+	// Phase 2: mailer + notifier + cron. Mailer falls back to slog if
+	// RESEND_API_KEY is empty so prod still ships in-app notifications
+	// without DKIM verified yet. See ADR-001 D2/D6.
+	mailerClient := mailer.New(s.cfg, s.logger)
+	notifier := jobtracker.NewNotifier(jtStore, mailerClient, s.logger)
+	jtHandler.WithNotifier(notifier)
+
+	urls := jobs.NewURLBuilder(s.cfg)
+	s.cron = cron.New(s.logger,
+		cron.Job{
+			Name:     "stale-apps",
+			NextFire: jobs.AtIST(3, 0),
+			Run:      jobs.MarkStaleApplications(jtStore, notifier, urls, s.logger),
+		},
+		cron.Job{
+			Name:     "daily-digest",
+			NextFire: jobs.AtIST(9, 0),
+			Run:      jobs.DailyApplicationDigest(jtStore, notifier, mailerClient, urls, s.logger),
+		},
+	)
+
 	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
 
 	// Compose middleware. Outer wrappers run first.
@@ -127,6 +155,13 @@ func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) Start(ctx context.Context) error {
 	errCh := make(chan error, 1)
 
+	// Spawn cron jobs under the same lifecycle as the http server. They
+	// receive the parent ctx so SIGTERM cancels their loops; Wait() below
+	// blocks the shutdown path until all in-flight Run() calls return.
+	if s.cron != nil {
+		s.cron.Start(ctx)
+	}
+
 	go func() {
 		s.logger.Info("http server starting", "addr", s.cfg.HTTPListenAddr, "env", s.cfg.Env)
 		if err := s.httpd.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -142,6 +177,12 @@ func (s *Server) Start(ctx context.Context) error {
 		defer cancel()
 		if err := s.httpd.Shutdown(shutdownCtx); err != nil {
 			return err
+		}
+		// Block until every cron loop has exited. Loops park on
+		// time.After most of the time, so this returns immediately under
+		// normal load. If a job is mid-run, we wait it out.
+		if s.cron != nil {
+			s.cron.Wait()
 		}
 		return nil
 	case err := <-errCh:

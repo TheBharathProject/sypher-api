@@ -54,6 +54,14 @@ type Config struct {
 	R2Bucket          string
 	R2PublicURL       string
 
+	// Email — Resend (used by internal/mailer). All optional. If
+	// ResendAPIKey or MailFromAddress is empty, the mailer falls back to
+	// a no-op slog implementation and Phase 2 still ships in-app
+	// notifications. See docs/adr/0001-notifications-email-cron.md (D2).
+	ResendAPIKey    string
+	MailFromAddress string
+	MailFromName    string
+
 	// AI — Deepseek (used by internal/ai). Optional in Phase 1.
 	DeepseekAPIKey            string
 	DeepseekBaseURL           string
@@ -112,6 +120,11 @@ func Load() (*Config, error) {
 		// FrontendLoginRedirect so existing dev setups keep working without
 		// touching .env. Set explicitly in prod to "https://sypher.in/u/".
 		PublicProfileBaseURL:    envWithDefault("PUBLIC_PROFILE_BASE_URL", ""),
+
+		// Email — all optional. Mailer.New degrades to slog noop if blank.
+		ResendAPIKey:    os.Getenv("RESEND_API_KEY"),
+		MailFromAddress: os.Getenv("MAIL_FROM_ADDRESS"),
+		MailFromName:    envWithDefault("MAIL_FROM_NAME", "Pegasus"),
 
 		// Optional in Phase 1 — only required when Phase 2 endpoints are hit.
 		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),

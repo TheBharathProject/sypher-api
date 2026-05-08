@@ -25,6 +25,12 @@
 #       Optional but recommended (features quietly fail without them):
 #         R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL
 #         DEEPSEEK_API_KEY                 — without this, AI features 503
+#         RESEND_API_KEY                   — without this, the mailer falls back to slog
+#                                            and Phase 2 still ships in-app notifications;
+#                                            set it once your sending domain is DKIM verified
+#         MAIL_FROM_ADDRESS                — e.g. "hello@sypher.in". Required alongside
+#                                            RESEND_API_KEY; without it the mailer noops.
+#         MAIL_FROM_NAME                   — e.g. "Pegasus". Defaults to "Pegasus" if unset.
 #       Optional with sane defaults (override only if you know why):
 #         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
 #         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)
@@ -95,10 +101,13 @@ OPTIONAL_VARS=(
   DEEPSEEK_API_KEY
   DEEPSEEK_BASE_URL
   DEEPSEEK_MODEL
+  RESEND_API_KEY
+  MAIL_FROM_ADDRESS
+  MAIL_FROM_NAME
 )
 
 # Warn (don't fail) on missing optionals so a half-configured deploy is loud.
-for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL DEEPSEEK_API_KEY; do
+for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL DEEPSEEK_API_KEY RESEND_API_KEY MAIL_FROM_ADDRESS; do
   if [ -z "${!v:-}" ]; then
     echo "??? $v unset — feature(s) depending on it will be degraded" >&2
   fi

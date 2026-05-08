@@ -18,8 +18,9 @@ import (
 )
 
 // Handler bundles the dependencies every /job-tracker/* endpoint needs.
-// r2/ai/aiUsage are optional — Phase-1-only deployments leave them nil and
-// the corresponding endpoints respond 503.
+// r2/ai/aiUsage/notifier are optional — Phase-1-only deployments leave
+// them nil and the corresponding endpoints respond 503 (or skip the
+// side-effect, as with notifier).
 type Handler struct {
 	cfg       *config.Config
 	store     *Store
@@ -28,6 +29,7 @@ type Handler struct {
 	r2        *storage.R2
 	ai        *ai.Client
 	aiUsage   *ai.UsageStore
+	notifier  Notifier
 }
 
 func NewHandler(cfg *config.Config, store *Store, authStore *auth.Store, logger *slog.Logger) *Handler {
@@ -44,6 +46,15 @@ func (h *Handler) WithStorage(r2 *storage.R2) *Handler {
 func (h *Handler) WithAI(c *ai.Client, u *ai.UsageStore) *Handler {
 	h.ai = c
 	h.aiUsage = u
+	return h
+}
+
+// WithNotifier attaches a Notifier so handlers that emit events (community
+// comments etc.) can call h.notifier.Push without nil-checking. Cron jobs
+// don't go through Handler — they hold their own reference to the notifier
+// directly. See ADR-001 D8.
+func (h *Handler) WithNotifier(n Notifier) *Handler {
+	h.notifier = n
 	return h
 }
 

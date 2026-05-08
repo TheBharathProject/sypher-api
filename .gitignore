@@ -4,6 +4,14 @@ dist/
 tmp/
 *.out
 
+# Loose go-build artifacts at repo root. Names match cmd/<name>/ packages.
+# Keep this list updated when a new cmd lands. Alternative: always
+# `go build -o bin/<name>` and rely on the bin/ rule above — but having
+# both belts and braces is fine.
+/api
+/migrate
+/cron-once
+
 # Local env
 .env
 .env.*
