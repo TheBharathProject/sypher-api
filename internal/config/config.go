@@ -40,6 +40,13 @@ type Config struct {
 	JWTTTL                  time.Duration
 	FrontendLoginRedirect   string
 
+	// Public profile URL prefix the API uses when echoing /u/<slug> URLs back
+	// to clients (Settings, Open Graph, etc.). Split out from
+	// FrontendLoginRedirect so that adding a second tool doesn't accidentally
+	// move the apex /u/ path under one tool's basePath. Defaults to
+	// derive-from-FrontendLoginRedirect for local dev convenience.
+	PublicProfileBaseURL    string
+
 	// Storage — Cloudflare R2 (used by internal/storage). Optional in Phase 1.
 	R2AccountID       string
 	R2AccessKeyID     string
@@ -101,6 +108,10 @@ func Load() (*Config, error) {
 		JWTAudience:             envWithDefault("JWT_AUDIENCE", "sypher.in"),
 		JWTTTL:                  jwtTTL,
 		FrontendLoginRedirect:   required("FRONTEND_LOGIN_REDIRECT_URL"),
+		// Default deliberately empty — handlers fall back to derive-from-
+		// FrontendLoginRedirect so existing dev setups keep working without
+		// touching .env. Set explicitly in prod to "https://sypher.in/u/".
+		PublicProfileBaseURL:    envWithDefault("PUBLIC_PROFILE_BASE_URL", ""),
 
 		// Optional in Phase 1 — only required when Phase 2 endpoints are hit.
 		R2AccountID:       os.Getenv("R2_ACCOUNT_ID"),

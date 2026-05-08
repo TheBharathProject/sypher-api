@@ -201,6 +201,29 @@ func (s *Store) SaveReport(ctx context.Context, userID uuid.UUID, fileID *uuid.U
 	return &r, nil
 }
 
+// ResumeUsage counts how often this resume has been referenced — today that
+// only means how many AI reports were generated against it. Once applications
+// gain a per-row resume picker, that count will join in. Tenant-isolated:
+// only counts the user's own rows, returns (0, nil) if the resume isn't theirs.
+func (s *Store) ResumeUsage(ctx context.Context, userID, resumeID uuid.UUID) (int, error) {
+	// Cheap ownership check first — saves a join when the resume isn't ours.
+	const ownQ = `SELECT 1 FROM job_tracker.files WHERE id = $1 AND user_id = $2 AND kind = 'resume'`
+	var x int
+	if err := s.pool.QueryRow(ctx, ownQ, resumeID, userID).Scan(&x); err != nil {
+		return 0, err // pgx.ErrNoRows bubbles up; handler maps to 404.
+	}
+	const q = `
+		SELECT COUNT(*)
+		FROM job_tracker.ai_reports
+		WHERE user_id = $1 AND resume_file_id = $2
+	`
+	var n int
+	if err := s.pool.QueryRow(ctx, q, userID, resumeID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // LatestReport returns the most recent report for the user, or pgx.ErrNoRows.
 func (s *Store) LatestReport(ctx context.Context, userID uuid.UUID) (*AIReport, error) {
 	const q = `

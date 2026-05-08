@@ -28,6 +28,9 @@
 #       Optional with sane defaults (override only if you know why):
 #         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
 #         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)
+#         PUBLIC_PROFILE_BASE_URL (defaults to derive-from-FRONTEND_LOGIN_REDIRECT_URL;
+#                                  set to "https://sypher.in/u/" in prod so the apex /u/
+#                                  doesn't drift under a tool's basePath as more tools land)
 #   - ~/.ghcr-auth  with GHCR_USERNAME, GHCR_TOKEN  (PAT with read:packages)
 #
 # Usage:
@@ -83,6 +86,7 @@ OPTIONAL_VARS=(
   JWT_TTL
   CORS_ORIGINS
   AI_USAGE_MONTHLY_TOKEN_LIMIT
+  PUBLIC_PROFILE_BASE_URL
   R2_ACCOUNT_ID
   R2_ACCESS_KEY_ID
   R2_SECRET_ACCESS_KEY

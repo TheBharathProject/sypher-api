@@ -35,13 +35,23 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	h.GetProfile(w, r)
 }
 
-// publicProfileBase derives the user-facing base URL from
-// FRONTEND_LOGIN_REDIRECT_URL. Falls back to the request host if config
-// hasn't been parsed correctly.
+// publicProfileBase returns the user-facing base for /u/<slug> URLs.
+// Resolution order:
 //
-//	FRONTEND_LOGIN_REDIRECT_URL=http://localhost:3000/auth/callback
-//	→ http://localhost:3000/u/
+//  1. PUBLIC_PROFILE_BASE_URL — explicit env var (e.g. "https://sypher.in/u/").
+//     Set this in prod so the apex /u/ stays apex-relative even when the
+//     FrontendLoginRedirect lives under a tool's basePath like /pegasus/auth/callback.
+//  2. Derive from FRONTEND_LOGIN_REDIRECT_URL host. Convenient for local dev.
+//  3. Last-ditch: scheme + r.Host + /u/. Only hits when both envs are blank,
+//     which won't happen in any deployed env.
 func (h *Handler) publicProfileBase(r *http.Request) string {
+	if h.cfg != nil && h.cfg.PublicProfileBaseURL != "" {
+		base := h.cfg.PublicProfileBaseURL
+		if !strings.HasSuffix(base, "/") {
+			base += "/"
+		}
+		return base
+	}
 	if h.cfg != nil && h.cfg.FrontendLoginRedirect != "" {
 		if u, err := url.Parse(h.cfg.FrontendLoginRedirect); err == nil && u.Host != "" {
 			return u.Scheme + "://" + u.Host + "/u/"

@@ -89,6 +89,80 @@ func (h *Handler) DeleteResume(w http.ResponseWriter, r *http.Request) {
 	h.deleteFile(w, r)
 }
 
+// ResumeViewURL returns a short-lived presigned GET URL the browser can use
+// as an iframe src to render the file inline. Tenant-isolated via GetFile —
+// returns 404 if the file isn't owned by the caller. Same pattern works for
+// cover letters via the unified route below.
+func (h *Handler) ResumeViewURL(w http.ResponseWriter, r *http.Request) {
+	h.fileViewURL(w, r, "resume")
+}
+
+func (h *Handler) CoverLetterViewURL(w http.ResponseWriter, r *http.Request) {
+	h.fileViewURL(w, r, "cover_letter")
+}
+
+func (h *Handler) fileViewURL(w http.ResponseWriter, r *http.Request, kind string) {
+	if !h.requireR2(w) {
+		return
+	}
+	uid := auth.MustUserID(r.Context())
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "invalid file id")
+		return
+	}
+	file, err := h.store.GetFile(r.Context(), uid, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "file not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	if file.Kind != kind {
+		httpx.WriteError(w, http.StatusBadRequest, "wrong_kind", "file kind mismatch")
+		return
+	}
+	url, err := h.r2.PresignGet(r.Context(), file.StorageKey, 5*time.Minute)
+	if err != nil {
+		h.logger.Error("presign get", "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "presign_failed", err.Error())
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"viewUrl":   url,
+		"expiresIn": int((5 * time.Minute).Seconds()),
+	})
+}
+
+// ResumeUsage returns how often the resume has been used. Today that's the
+// AI-report count; once applications gain a resume_id picker the response
+// will grow to {aiReports, applications}. Wraps the backend value the
+// frontend reads to decide whether to render the "Reviewed N times" badge.
+func (h *Handler) ResumeUsage(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "invalid resume id")
+		return
+	}
+	count, err := h.store.ResumeUsage(r.Context(), uid, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "resume not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"aiReports": count,
+	})
+}
+
 // ----------------------------------------------------------------------------
 // Cover letters
 // ----------------------------------------------------------------------------

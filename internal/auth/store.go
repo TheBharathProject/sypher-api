@@ -72,6 +72,16 @@ func (s *Store) UpdateUserTimezone(ctx context.Context, id uuid.UUID, tz string)
 	return err
 }
 
+// DeleteUser deletes the auth.users row for the given id. Every product table
+// (applications, notes, profile, files, ai_*, etc.) has ON DELETE CASCADE on
+// its user_id foreign key per migration 0002+, so the cascade tears down the
+// row tree atomically. There's no soft-delete — once gone, gone.
+func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
+	const q = `DELETE FROM auth.users WHERE id = $1`
+	_, err := s.pool.Exec(ctx, q, id)
+	return err
+}
+
 // IssueAPIToken creates a new token for the user. Returns the *plain* token
 // once (caller must show it to the user immediately) plus the row metadata.
 // Storage holds only the hash.

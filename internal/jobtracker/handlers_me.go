@@ -85,9 +85,26 @@ func (h *Handler) IssueAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"token": plain,
-		"id":    meta.ID,
+		"token":  plain,
+		"id":     meta.ID,
 		"prefix": meta.Prefix,
 		"label":  meta.Label,
 	})
+}
+
+// DeleteAccount drops the user from auth.users; ON DELETE CASCADE on every
+// product table tears down everything they own (applications, notes,
+// resumes/cover-letters in DB metadata only — actual R2 objects live until
+// the bucket lifecycle policy reaps them, which is fine since the DB no
+// longer references them).
+//
+// Returns 204 on success. Caller is expected to clearToken() and bounce the
+// user to the apex client-side.
+func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	if err := h.authStore.DeleteUser(r.Context(), uid); err != nil {
+		writeDBError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

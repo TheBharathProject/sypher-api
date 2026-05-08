@@ -15,6 +15,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("PATCH", "/job-tracker/me/name", h.UpdateName)
 	g("PATCH", "/job-tracker/me/timezone", h.UpdateTimezone)
 	g("POST", "/job-tracker/me/api-token", h.IssueAPIToken)
+	g("POST", "/job-tracker/me/delete", h.DeleteAccount)
 
 	// Dashboard analytics
 	g("GET", "/job-tracker/analytics/dashboard", h.Dashboard)
@@ -78,12 +79,15 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("PATCH", "/job-tracker/resumes/{id}/finalize", h.FinalizeResume)
 	g("PATCH", "/job-tracker/resumes/{id}", h.UpdateFileLabel)
 	g("DELETE", "/job-tracker/resumes/{id}", h.DeleteResume)
+	g("GET", "/job-tracker/resumes/{id}/usage", h.ResumeUsage)
+	g("GET", "/job-tracker/resumes/{id}/view-url", h.ResumeViewURL)
 
 	g("GET", "/job-tracker/cover-letters", h.ListCoverLetters)
 	g("POST", "/job-tracker/cover-letters/upload-url", h.RequestCoverLetterUploadURL)
 	g("PATCH", "/job-tracker/cover-letters/{id}/finalize", h.FinalizeCoverLetter)
 	g("PATCH", "/job-tracker/cover-letters/{id}", h.UpdateFileLabel)
 	g("DELETE", "/job-tracker/cover-letters/{id}", h.DeleteCoverLetter)
+	g("GET", "/job-tracker/cover-letters/{id}/view-url", h.CoverLetterViewURL)
 
 	// ----- Phase 2: AI (Deepseek) -----
 	g("POST", "/job-tracker/resume/extract", h.ExtractResume)
