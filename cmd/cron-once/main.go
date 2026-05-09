@@ -6,6 +6,7 @@
 //
 //	go run ./cmd/cron-once stale-apps
 //	go run ./cmd/cron-once daily-digest
+//	go run ./cmd/cron-once expire-one-time-premium
 //
 // Reads the same env vars as cmd/api (DATABASE_URL, RESEND_API_KEY, etc).
 // Skip RESEND_API_KEY to dry-run the email leg via the slog mailer.
@@ -20,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/TheBharathProject/sypher-api/internal/billing"
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/cron/jobs"
 	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
@@ -30,7 +32,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cron-once <stale-apps|daily-digest>")
+		fmt.Fprintln(os.Stderr, "usage: cron-once <stale-apps|daily-digest|expire-one-time-premium>")
 		os.Exit(2)
 	}
 	jobName := os.Args[1]
@@ -64,8 +66,10 @@ func main() {
 		run = jobs.MarkStaleApplications(store, n, urls, logger)
 	case "daily-digest":
 		run = jobs.DailyApplicationDigest(store, n, m, urls, logger)
+	case "expire-one-time-premium":
+		run = jobs.ExpireOneTimePremium(billing.NewStore(pool), logger)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown job: %s (expected stale-apps|daily-digest)\n", jobName)
+		fmt.Fprintf(os.Stderr, "unknown job: %s (expected stale-apps|daily-digest|expire-one-time-premium)\n", jobName)
 		os.Exit(2)
 	}
 

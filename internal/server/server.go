@@ -11,6 +11,7 @@ import (
 
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
+	"github.com/TheBharathProject/sypher-api/internal/billing"
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/cron"
 	"github.com/TheBharathProject/sypher-api/internal/cron/jobs"
@@ -120,6 +121,22 @@ func (s *Server) routes() http.Handler {
 	notifier := jobtracker.NewNotifier(jtStore, mailerClient, s.logger)
 	jtHandler.WithNotifier(notifier)
 
+	// Billing — Razorpay-backed subscriptions, one-time premium passes,
+	// and credit packs. Client is nil when RAZORPAY_KEY_ID/SECRET are
+	// blank; in that case the handler responds 503 to checkout calls
+	// (mirrors how R2 / Deepseek degrade), but the rest of the app
+	// still boots. Webhook is wired regardless — even without keys we
+	// can echo back signature-rejection 401s without crashing.
+	billingStore := billing.NewStore(s.pool)
+	billingClient := billing.NewClient(s.cfg.RazorpayKeyID, s.cfg.RazorpayKeySecret)
+	billingHandler := billing.NewHandler(billingStore, billingClient, s.cfg.RazorpayPlanID, s.cfg.RazorpayPlanIDPlus, s.logger)
+	billingWebhook := billing.NewWebhookHandler(billingStore, s.cfg.RazorpayWebhookSecret, s.logger)
+	if billingClient != nil {
+		s.logger.Info("razorpay configured", "plan_id", s.cfg.RazorpayPlanID)
+	} else {
+		s.logger.Info("razorpay skipped", "reason", "RAZORPAY_KEY_ID or _SECRET unset")
+	}
+
 	urls := jobs.NewURLBuilder(s.cfg)
 	s.cron = cron.New(s.logger,
 		cron.Job{
@@ -132,9 +149,24 @@ func (s *Server) routes() http.Handler {
 			NextFire: jobs.AtIST(9, 0),
 			Run:      jobs.DailyApplicationDigest(jtStore, notifier, mailerClient, urls, s.logger),
 		},
+		cron.Job{
+			Name:     "expire-one-time-premium",
+			NextFire: jobs.AtIST(4, 0),
+			Run:      jobs.ExpireOneTimePremium(billingStore, s.logger),
+		},
 	)
 
 	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
+
+	// Billing routes — auth-gated (premium is per-user) except the
+	// webhook which is signed with HMAC.
+	mux.Handle("POST /billing/checkout/subscription", requireUser(http.HandlerFunc(billingHandler.CheckoutSubscription)))
+	mux.Handle("POST /billing/checkout/subscription-plus", requireUser(http.HandlerFunc(billingHandler.CheckoutSubscriptionPlus)))
+	mux.Handle("POST /billing/checkout/premium-pass", requireUser(http.HandlerFunc(billingHandler.CheckoutPremiumPass)))
+	mux.Handle("POST /billing/checkout/credits", requireUser(http.HandlerFunc(billingHandler.CheckoutCredits)))
+	mux.Handle("POST /billing/subscriptions/{id}/cancel", requireUser(http.HandlerFunc(billingHandler.CancelSubscription)))
+	mux.Handle("GET /billing/me", requireUser(http.HandlerFunc(billingHandler.GetMe)))
+	mux.Handle("POST /webhooks/razorpay", billingWebhook) // public, signature-verified
 
 	// Compose middleware. Outer wrappers run first.
 	var h http.Handler = mux

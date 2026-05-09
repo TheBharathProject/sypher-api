@@ -67,6 +67,23 @@ type Config struct {
 	DeepseekBaseURL           string
 	DeepseekModel             string
 	AIUsageMonthlyTokenLimit  int64
+
+	// Razorpay — payments (used by internal/billing). Optional; if any
+	// of RazorpayKeyID/Secret are blank, the billing handlers respond
+	// 503 service_unavailable instead of refusing to boot. The webhook
+	// secret is set per-endpoint in the Razorpay dashboard. PlanID is
+	// the recurring-monthly plan, created once in the dashboard and
+	// referenced when starting subscriptions. See ADR-0006 (D8).
+	RazorpayKeyID         string
+	RazorpayKeySecret     string
+	RazorpayWebhookSecret string
+	// Razorpay Plan id for the standard ₹99/mo tier (premium-only).
+	RazorpayPlanID        string
+	// Razorpay Plan id for the ₹299/mo tier (premium + 200 credits per
+	// charge). Optional — when blank, the /billing/checkout/subscription-
+	// plus endpoint responds 503 service_unavailable and the frontend's
+	// Premium+ card is hidden.
+	RazorpayPlanIDPlus    string
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -137,6 +154,12 @@ func Load() (*Config, error) {
 		DeepseekBaseURL:          envWithDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 		DeepseekModel:            envWithDefault("DEEPSEEK_MODEL", "deepseek-chat"),
 		AIUsageMonthlyTokenLimit: aiLimit,
+
+		RazorpayKeyID:         os.Getenv("RAZORPAY_KEY_ID"),
+		RazorpayKeySecret:     os.Getenv("RAZORPAY_KEY_SECRET"),
+		RazorpayWebhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"),
+		RazorpayPlanID:        os.Getenv("RAZORPAY_PLAN_ID"),
+		RazorpayPlanIDPlus:    os.Getenv("RAZORPAY_PLAN_ID_PLUS"),
 	}
 
 	if len(missing) > 0 {

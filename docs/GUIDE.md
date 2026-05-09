@@ -1399,7 +1399,8 @@ The product spec (from earlier brainstorming):
 - For each profile, **the top 10 reels** are fetched and analyzed
 - **Weekly auto-refresh** (background work)
 - Each reel gets a transcript, hook archetype breakdown, and 3 "repurpose for me" concepts
-- ₹99/month subscription, gated via Stripe webhook
+- ₹99/month subscription, gated via Razorpay webhook (matches Pegasus
+  billing — see `internal/billing/` and `docs/adr/0006-razorpay-billing.md`)
 - ~10 endpoints expected → **Tier 2**
 
 The new pattern Reel Hooks introduces compared to `waitlist`: **async background work**. The Apify → yt-dlp → Deepgram → Claude pipeline takes minutes — handlers can't run it inline. So we add two new sub-packages: `pipeline/` (pure logic, no HTTP) and `worker/` (the loop that drives the pipeline).
