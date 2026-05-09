@@ -132,7 +132,18 @@ func (s *Server) routes() http.Handler {
 	billingHandler := billing.NewHandler(billingStore, billingClient, s.cfg.RazorpayPlanID, s.cfg.RazorpayPlanIDPlus, s.logger)
 	billingWebhook := billing.NewWebhookHandler(billingStore, s.cfg.RazorpayWebhookSecret, s.logger)
 	if billingClient != nil {
-		s.logger.Info("razorpay configured", "plan_id", s.cfg.RazorpayPlanID)
+		// Log both plan ids so a missing plus plan is obvious at boot.
+		// The plus tier is optional — when blank, the corresponding
+		// /billing/checkout/subscription-plus endpoint responds 503 and
+		// the frontend hides the Premium+ card.
+		plusStatus := "unset"
+		if s.cfg.RazorpayPlanIDPlus != "" {
+			plusStatus = s.cfg.RazorpayPlanIDPlus
+		}
+		s.logger.Info("razorpay configured",
+			"plan_id_standard", s.cfg.RazorpayPlanID,
+			"plan_id_plus", plusStatus,
+		)
 	} else {
 		s.logger.Info("razorpay skipped", "reason", "RAZORPAY_KEY_ID or _SECRET unset")
 	}
