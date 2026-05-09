@@ -15,6 +15,8 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("PATCH", "/job-tracker/me/name", h.UpdateName)
 	g("PATCH", "/job-tracker/me/timezone", h.UpdateTimezone)
 	g("POST", "/job-tracker/me/api-token", h.IssueAPIToken)
+	g("GET", "/job-tracker/me/api-tokens", h.ListAPITokens)
+	g("DELETE", "/job-tracker/me/api-tokens/{id}", h.RevokeAPIToken)
 	g("POST", "/job-tracker/me/delete", h.DeleteAccount)
 	g("PATCH", "/job-tracker/me/email-prefs", h.UpdateEmailPrefs)
 
@@ -34,6 +36,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/applications/import", h.ImportApplications)
 	g("POST", "/job-tracker/applications/import/preview", h.PreviewImportApplications)
 	g("GET", "/job-tracker/applications/import/template", h.ApplicationsTemplate)
+	g("GET", "/job-tracker/applications/check-link", h.CheckApplicationByLink)
 	g("GET", "/job-tracker/applications/{id}", h.GetApplication)
 	g("GET", "/job-tracker/applications/{id}/timeline", h.ApplicationTimeline)
 	g("PUT", "/job-tracker/applications/{id}", h.UpdateApplication)

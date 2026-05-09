@@ -41,10 +41,21 @@ type GoogleProfile struct {
 
 // APIToken is a long-lived per-user token (browser extension).
 // The plain `token` value is only available at issue time; we store the hash.
+//
+// Scopes restrict what the token can do. An empty scopes array means
+// "full access" (legacy behavior); a non-empty array gates the token to
+// a small set of routes — see middleware.go for the allow-list table.
 type APIToken struct {
 	ID         uuid.UUID `json:"id"`
 	Prefix     string    `json:"prefix"`
 	Label      string    `json:"label,omitempty"`
+	Scopes     []string  `json:"scopes"`
 	CreatedAt  string    `json:"createdAt"`
 	LastUsedAt string    `json:"lastUsedAt,omitempty"`
+	RevokedAt  string    `json:"revokedAt,omitempty"`
 }
+
+// ScopeExtensionCapture is the scope minted by default for tokens
+// generated via /job-tracker/me/api-token. Whitelists the three routes
+// the Pegasus browser extension actually uses (see middleware.go).
+const ScopeExtensionCapture = "extension:capture"

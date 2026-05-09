@@ -46,6 +46,72 @@ func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 // Applications
 // ============================================================================
 
+// CheckLinkResult is what CheckApplicationByJobLink returns. The id +
+// stage are populated only when the link matches an existing row.
+type CheckLinkResult struct {
+	Exists        bool      `json:"exists"`
+	ApplicationID uuid.UUID `json:"applicationId,omitempty"`
+	Stage         string    `json:"stage,omitempty"`
+}
+
+// FindApplicationIDByJobLink returns the most-recent application row's
+// id for a given (user_id, job_link). Used by the upsert path on POST
+// /applications: if the link is already on file, we route to update
+// instead of insert. Returns pgx.ErrNoRows when no match exists.
+//
+// Match is exact on the value submitted (the extension strips query
+// strings before saving, the same shape we stored last time).
+func (s *Store) FindApplicationIDByJobLink(ctx context.Context, userID uuid.UUID, jobLink string) (uuid.UUID, error) {
+	jobLink = strings.TrimSpace(jobLink)
+	if jobLink == "" {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	const q = `
+		SELECT id
+		FROM job_tracker.applications
+		WHERE user_id = $1 AND job_link = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, q, userID, jobLink).Scan(&id)
+	return id, err
+}
+
+// CheckApplicationByJobLink reports whether the user already has an
+// application row with the given job_link. Used by the browser
+// extension's duplicate-detection step before the form even renders.
+//
+// Match is exact on the value the extension sends (it strips query
+// strings on its side). If the user has multiple matches we return the
+// most recent — the extension only needs to know "is it in your tracker
+// already?" plus a deep link to the row.
+func (s *Store) CheckApplicationByJobLink(ctx context.Context, userID uuid.UUID, jobLink string) (*CheckLinkResult, error) {
+	jobLink = strings.TrimSpace(jobLink)
+	if jobLink == "" {
+		return &CheckLinkResult{Exists: false}, nil
+	}
+	const q = `
+		SELECT id, stage
+		FROM job_tracker.applications
+		WHERE user_id = $1 AND job_link = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	var (
+		id    uuid.UUID
+		stage string
+	)
+	err := s.pool.QueryRow(ctx, q, userID, jobLink).Scan(&id, &stage)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &CheckLinkResult{Exists: false}, nil
+		}
+		return nil, fmt.Errorf("check-link: %w", err)
+	}
+	return &CheckLinkResult{Exists: true, ApplicationID: id, Stage: stage}, nil
+}
+
 type ListAppsOpts struct {
 	Stage  string
 	Source string

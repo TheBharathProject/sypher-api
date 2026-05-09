@@ -120,10 +120,14 @@ func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-// IssueAPIToken creates a new token for the user. Returns the *plain* token
-// once (caller must show it to the user immediately) plus the row metadata.
-// Storage holds only the hash.
-func (s *Store) IssueAPIToken(ctx context.Context, userID uuid.UUID, label string) (plainToken string, meta *APIToken, err error) {
+// IssueAPIToken creates a new token for the user. Returns the *plain*
+// token once (caller must show it to the user immediately) plus the row
+// metadata. Storage holds only the hash.
+//
+// `scopes` defaults to ["extension:capture"] when nil — handlers that
+// want a full-access "personal" token can pass an empty slice explicitly.
+// See middleware.go for the scope→routes allow-list.
+func (s *Store) IssueAPIToken(ctx context.Context, userID uuid.UUID, label string, scopes []string) (plainToken string, meta *APIToken, err error) {
 	raw, err := RandomState() // re-use random helper; produces ~32 chars
 	if err != nil {
 		return "", nil, fmt.Errorf("rand: %w", err)
@@ -133,36 +137,98 @@ func (s *Store) IssueAPIToken(ctx context.Context, userID uuid.UUID, label strin
 	hash := hex.EncodeToString(sum[:])
 	prefix := plain[:8]
 
+	if scopes == nil {
+		scopes = []string{ScopeExtensionCapture}
+	}
+
 	const q = `
-		INSERT INTO auth.api_tokens (user_id, token_hash, prefix, label)
-		VALUES ($1, $2, $3, NULLIF($4, ''))
-		RETURNING id, prefix, COALESCE(label, ''), to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		INSERT INTO auth.api_tokens (user_id, token_hash, prefix, label, scopes)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5)
+		RETURNING id, prefix, COALESCE(label, ''), scopes,
+			to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 	`
 	m := &APIToken{}
-	err = s.pool.QueryRow(ctx, q, userID, hash, prefix, label).
-		Scan(&m.ID, &m.Prefix, &m.Label, &m.CreatedAt)
+	err = s.pool.QueryRow(ctx, q, userID, hash, prefix, label, scopes).
+		Scan(&m.ID, &m.Prefix, &m.Label, &m.Scopes, &m.CreatedAt)
 	if err != nil {
 		return "", nil, fmt.Errorf("insert token: %w", err)
 	}
 	return plain, m, nil
 }
 
-// LookupAPIToken returns the user_id behind a plain token, or pgx.ErrNoRows.
-func (s *Store) LookupAPIToken(ctx context.Context, plain string) (uuid.UUID, error) {
+// LookupAPIToken returns the user_id + scopes behind a plain token, or
+// pgx.ErrNoRows when the hash is unknown OR the row has been revoked.
+// Bumps last_used_at as part of the same UPDATE so a successful lookup
+// always advances the audit timestamp.
+//
+// Scopes is empty for legacy tokens (full access) or a list like
+// ["extension:capture"] for new ones. The caller is responsible for
+// gating the request based on the returned scopes.
+func (s *Store) LookupAPIToken(ctx context.Context, plain string) (uuid.UUID, []string, error) {
 	sum := sha256.Sum256([]byte(plain))
 	hash := hex.EncodeToString(sum[:])
 	const q = `
 		UPDATE auth.api_tokens SET last_used_at = NOW()
-		WHERE token_hash = $1
-		RETURNING user_id
+		WHERE token_hash = $1 AND revoked_at IS NULL
+		RETURNING user_id, scopes
 	`
-	var uid uuid.UUID
-	err := s.pool.QueryRow(ctx, q, hash).Scan(&uid)
+	var (
+		uid    uuid.UUID
+		scopes []string
+	)
+	err := s.pool.QueryRow(ctx, q, hash).Scan(&uid, &scopes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, pgx.ErrNoRows
+			return uuid.Nil, nil, pgx.ErrNoRows
 		}
-		return uuid.Nil, err
+		return uuid.Nil, nil, err
 	}
-	return uid, nil
+	return uid, scopes, nil
+}
+
+// ListAPITokens returns the user's tokens (active + revoked) most-recent
+// first. Plaintext is never available — only the prefix + metadata.
+func (s *Store) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]APIToken, error) {
+	const q = `
+		SELECT id, prefix, COALESCE(label, ''), scopes,
+			to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			COALESCE(to_char(last_used_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
+			COALESCE(to_char(revoked_at,   'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')
+		FROM auth.api_tokens
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := s.pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list api_tokens: %w", err)
+	}
+	defer rows.Close()
+	out := []APIToken{}
+	for rows.Next() {
+		var t APIToken
+		if err := rows.Scan(&t.ID, &t.Prefix, &t.Label, &t.Scopes, &t.CreatedAt, &t.LastUsedAt, &t.RevokedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeAPIToken flips revoked_at on a token owned by the given user.
+// Returns pgx.ErrNoRows if the token doesn't exist, isn't theirs, or is
+// already revoked — the handler maps that to 404.
+func (s *Store) RevokeAPIToken(ctx context.Context, userID, tokenID uuid.UUID) error {
+	const q = `
+		UPDATE auth.api_tokens
+		SET revoked_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+	`
+	tag, err := s.pool.Exec(ctx, q, tokenID, userID)
+	if err != nil {
+		return fmt.Errorf("revoke api_token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }

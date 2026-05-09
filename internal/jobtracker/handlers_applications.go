@@ -2,10 +2,13 @@ package jobtracker
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/TheBharathProject/sypher-api/internal/auth"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
@@ -25,6 +28,25 @@ func (h *Handler) ListApplications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, apps)
+}
+
+// CheckApplicationByLink answers "do I already have this job link in my
+// tracker?". The browser extension hits this before showing its form,
+// so a duplicate save flow shows "Already saved" with a deep link
+// instead of opening a fresh capture form.
+//
+// Returns 200 always — the body's `exists` boolean carries the verdict.
+// Empty/missing jobLink returns {exists:false} rather than 400 so the
+// extension can call this unconditionally on any page.
+func (h *Handler) CheckApplicationByLink(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	jobLink := r.URL.Query().Get("jobLink")
+	res, err := h.store.CheckApplicationByJobLink(r.Context(), uid, jobLink)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func (h *Handler) GetApplication(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +79,15 @@ func (h *Handler) validateAppInput(in *ApplicationInput) error {
 	return nil
 }
 
+// CreateApplication handles POST /applications. It upserts on job_link
+// — when the same user already has a row with the submitted job_link,
+// the call is routed to UpdateApplication and the response is 200
+// (with `X-Application-Status: updated`). New rows return 201.
+//
+// This shape lets the browser extension re-save a job (e.g. to bump the
+// stage from INTERESTED → APPLIED) without leaving duplicate rows in
+// the tracker. Empty job_link always inserts — manual entries without a
+// URL aren't deduped.
 func (h *Handler) CreateApplication(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
 	var in ApplicationInput
@@ -67,11 +98,34 @@ func (h *Handler) CreateApplication(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", err.Error())
 		return
 	}
+
+	link := strings.TrimSpace(in.JobLink)
+	if link != "" {
+		existingID, err := h.store.FindApplicationIDByJobLink(r.Context(), uid, link)
+		if err == nil {
+			updated, uErr := h.store.UpdateApplication(r.Context(), uid, existingID, in)
+			if uErr != nil {
+				writeDBError(w, uErr)
+				return
+			}
+			w.Header().Set("X-Application-Status", "updated")
+			httpx.WriteJSON(w, http.StatusOK, updated)
+			return
+		}
+		// Any error other than "no match" is a real DB failure — don't
+		// silently fall through to insert and risk a constraint surprise.
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeDBError(w, err)
+			return
+		}
+	}
+
 	a, err := h.store.CreateApplication(r.Context(), uid, in)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
+	w.Header().Set("X-Application-Status", "created")
 	httpx.WriteJSON(w, http.StatusCreated, a)
 }
 

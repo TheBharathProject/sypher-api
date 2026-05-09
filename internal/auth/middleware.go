@@ -19,10 +19,60 @@ const (
 	ctxKeyEmail
 )
 
+// apiTokenPrefix matches the prefix the Pegasus browser extension uses
+// for long-lived bearer tokens (issued via /job-tracker/me/api-token).
+// We branch on this prefix so a JWT — which is dot-separated base64url
+// and never starts with "pg_" — always takes the JWT path.
+const apiTokenPrefix = "pg_"
+
+// scopeRouteAllowlist enumerates the routes each scope unlocks. A token
+// with scope `S` may only hit routes listed under `S`. This is checked
+// against r.Method + " " + r.URL.Path — every entry below is a literal
+// route with no path params, which keeps the check trivial.
+//
+// Adding a new scope: add an entry here AND default-issue tokens with
+// that scope for the appropriate flow. Adding a new extension route:
+// list it under "extension:capture".
+//
+// Tokens with empty scopes are legacy "full access" — the gate skips
+// the allow-list check for those (existing behavior).
+var scopeRouteAllowlist = map[string]map[string]bool{
+	"extension:capture": {
+		"GET /job-tracker/me":                          true,
+		"GET /job-tracker/applications/check-link":     true,
+		"POST /job-tracker/applications":               true,
+	},
+}
+
+// allowedByScopes returns true if any of the token's scopes whitelist
+// the requested route. Empty scopes is full access (legacy tokens).
+func allowedByScopes(scopes []string, method, path string) bool {
+	if len(scopes) == 0 {
+		return true
+	}
+	key := method + " " + path
+	for _, s := range scopes {
+		if routes, ok := scopeRouteAllowlist[s]; ok && routes[key] {
+			return true
+		}
+	}
+	return false
+}
+
 // RequireUser is a middleware factory: it returns a function that wraps an
-// http.Handler with JWT validation. On success, the user's UUID and email
-// are placed on the request context for downstream handlers.
-func RequireUser(secret, issuer, audience string) func(http.Handler) http.Handler {
+// http.Handler with bearer-token validation. On success, the user's UUID
+// (and email when available) are placed on the request context for
+// downstream handlers.
+//
+// The middleware accepts two token shapes:
+//   - JWTs (default) — short-lived, browser-session-scoped.
+//   - "pg_..." API tokens — long-lived, per-user, issued from Settings
+//     and stored in auth.api_tokens. Used by the browser extension.
+//
+// If `store` is nil, the pg_ path is disabled and only JWTs are accepted
+// (kept optional so callers that don't need extension auth can skip the
+// dependency).
+func RequireUser(secret, issuer, audience string, store *Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
@@ -35,7 +85,33 @@ func RequireUser(secret, issuer, audience string) func(http.Handler) http.Handle
 				httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing bearer token")
 				return
 			}
-			id, email, err := VerifyJWT(secret, issuer, audience, raw)
+			var (
+				id    uuid.UUID
+				email string
+				err   error
+			)
+			if store != nil && strings.HasPrefix(raw, apiTokenPrefix) {
+				var scopes []string
+				id, scopes, err = store.LookupAPIToken(r.Context(), raw)
+				if err == nil {
+					// Enforce scope before doing anything else. Scope rejection
+					// is 403 (you ARE authenticated, you're just not allowed
+					// here), distinct from 401 token-invalid.
+					if !allowedByScopes(scopes, r.Method, r.URL.Path) {
+						httpx.WriteError(w, http.StatusForbidden, "scope_denied",
+							"this token isn't authorised for this endpoint")
+						return
+					}
+					// Email is best-effort — a missing row here just means we
+					// won't have it on context (downstream handlers that need
+					// it should fetch via authStore.GetUserByID anyway).
+					if u, uErr := store.GetUserByID(r.Context(), id); uErr == nil {
+						email = u.Email
+					}
+				}
+			} else {
+				id, email, err = VerifyJWT(secret, issuer, audience, raw)
+			}
 			if err != nil {
 				httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid token")
 				return

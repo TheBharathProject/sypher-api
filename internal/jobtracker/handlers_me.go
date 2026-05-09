@@ -79,7 +79,10 @@ func (h *Handler) IssueAPIToken(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
 	var in issueTokenInput
 	readJSONOptional(r, &in)
-	plain, meta, err := h.authStore.IssueAPIToken(r.Context(), uid, in.Label)
+	// nil scopes → default to ["extension:capture"]. The scope is checked
+	// per-route in auth.RequireUser; the token can only hit /me + /apps
+	// /check-link + POST /apps. Other /job-tracker/* routes return 403.
+	plain, meta, err := h.authStore.IssueAPIToken(r.Context(), uid, in.Label, nil)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -90,6 +93,38 @@ func (h *Handler) IssueAPIToken(w http.ResponseWriter, r *http.Request) {
 		"prefix": meta.Prefix,
 		"label":  meta.Label,
 	})
+}
+
+// ListAPITokens returns the user's extension tokens (active + revoked).
+// Plaintext is never included; the UI shows the prefix + label only.
+func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	tokens, err := h.authStore.ListAPITokens(r.Context(), uid)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, tokens)
+}
+
+// RevokeAPIToken flips revoked_at on one of the user's tokens. The id is
+// pulled from the path. Returns 204 on success, 404 when the token
+// doesn't exist or is already revoked.
+func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	tokID, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.authStore.RevokeAPIToken(r.Context(), uid, tokID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "token not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type updateEmailPrefsInput struct {

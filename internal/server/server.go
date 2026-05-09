@@ -74,8 +74,10 @@ func (s *Server) routes() http.Handler {
 
 	// Job-tracker tool — every endpoint behind RequireUser, except the
 	// public profile route which the tool registers itself.
-	requireUser := auth.RequireUser(s.cfg.JWTSecret, s.cfg.JWTIssuer, s.cfg.JWTAudience)
 	jtStore := jobtracker.NewStore(s.pool)
+	// authStore is passed so RequireUser can resolve `pg_` browser-extension
+	// tokens via auth.api_tokens in addition to the default JWT path.
+	requireUser := auth.RequireUser(s.cfg.JWTSecret, s.cfg.JWTIssuer, s.cfg.JWTAudience, authStore)
 	jtHandler := jobtracker.NewHandler(s.cfg, jtStore, authStore, s.logger)
 
 	// Have the OAuth callback eagerly provision a job-tracker profile +
