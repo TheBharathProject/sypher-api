@@ -31,6 +31,17 @@
 #         MAIL_FROM_ADDRESS                — e.g. "hello@sypher.in". Required alongside
 #                                            RESEND_API_KEY; without it the mailer noops.
 #         MAIL_FROM_NAME                   — e.g. "Pegasus". Defaults to "Pegasus" if unset.
+#         RAZORPAY_KEY_ID                  — without this + _SECRET, billing handlers
+#                                            return 503 service_unavailable; the rest of
+#                                            the app boots fine. Use rzp_test_* for test mode,
+#                                            rzp_live_* once KYC is approved.
+#         RAZORPAY_KEY_SECRET              — pair to KEY_ID, server-only.
+#         RAZORPAY_WEBHOOK_SECRET          — set per-endpoint in Razorpay dashboard;
+#                                            HMAC-SHA256 verifies webhook payloads.
+#         RAZORPAY_PLAN_ID                 — plan_xxx for ₹99/mo standard recurring tier.
+#         RAZORPAY_PLAN_ID_PLUS            — plan_xxx for ₹299/mo Premium+ tier
+#                                            (premium + 200 credits/cycle). Optional;
+#                                            empty hides the Premium+ card on /upgrade.
 #       Optional with sane defaults (override only if you know why):
 #         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
 #         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)
@@ -104,10 +115,22 @@ OPTIONAL_VARS=(
   RESEND_API_KEY
   MAIL_FROM_ADDRESS
   MAIL_FROM_NAME
+  # Razorpay billing (Phase 6b). Without RAZORPAY_KEY_ID / _SECRET the
+  # billing handlers respond 503 and the rest of the app keeps booting.
+  # Without RAZORPAY_PLAN_ID_PLUS the Premium+ tier endpoint 503s and
+  # the frontend hides that card. See docs/adr/0006-razorpay-billing.md.
+  RAZORPAY_KEY_ID
+  RAZORPAY_KEY_SECRET
+  RAZORPAY_WEBHOOK_SECRET
+  RAZORPAY_PLAN_ID
+  RAZORPAY_PLAN_ID_PLUS
 )
 
 # Warn (don't fail) on missing optionals so a half-configured deploy is loud.
-for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL DEEPSEEK_API_KEY RESEND_API_KEY MAIL_FROM_ADDRESS; do
+for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL \
+         DEEPSEEK_API_KEY RESEND_API_KEY MAIL_FROM_ADDRESS \
+         RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET \
+         RAZORPAY_PLAN_ID RAZORPAY_PLAN_ID_PLUS; do
   if [ -z "${!v:-}" ]; then
     echo "??? $v unset — feature(s) depending on it will be degraded" >&2
   fi
