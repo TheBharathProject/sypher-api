@@ -75,6 +75,57 @@ type DashboardMetrics struct {
 	ConversionRate float64 `json:"conversionRate"`
 }
 
+// ResumeTweak is the full row exposed at /ai/resume/tweaks/{id}. The
+// `parent_id`/`application_id`/`source_file_id` references are flattened
+// to plain string pointers in JSON so the FE doesn't have to know about
+// pgx's null-uuid type. UserEdits is the optional post-AI manual edit
+// the user persists via PATCH.
+type ResumeTweak struct {
+	ID            uuid.UUID `json:"id"`
+	ParentID      *string   `json:"parentId,omitempty"`
+	ApplicationID *string   `json:"applicationId,omitempty"`
+	SourceFileID  *string   `json:"sourceFileId,omitempty"`
+	Title         string    `json:"title"`
+	SourceText    string    `json:"sourceText"`
+	Prompt        string    `json:"prompt"`
+	TweakedText   string    `json:"tweakedText"`
+	UserEdits     string    `json:"userEdits,omitempty"`
+	TokensIn      int       `json:"tokensIn"`
+	TokensOut     int       `json:"tokensOut"`
+	CreatedAt     string    `json:"createdAt"`
+	UpdatedAt     string    `json:"updatedAt"`
+}
+
+// ResumeTweakSummary is the lightweight row returned by the list endpoint —
+// drops the heavy text blobs so the history pane stays cheap to render.
+type ResumeTweakSummary struct {
+	ID            uuid.UUID `json:"id"`
+	ParentID      *string   `json:"parentId,omitempty"`
+	ApplicationID *string   `json:"applicationId,omitempty"`
+	Title         string    `json:"title"`
+	CreatedAt     string    `json:"createdAt"`
+	UpdatedAt     string    `json:"updatedAt"`
+}
+
+// ResumeTweakInput is the writable surface (POST body). Either sourceFileId
+// (a Vault resume) or sourceText (pasted) is required when ParentID is
+// empty; if ParentID is set, the parent row's text supplies the source.
+type ResumeTweakInput struct {
+	ApplicationID string `json:"applicationId"`
+	ParentID      string `json:"parentId"`
+	SourceFileID  string `json:"sourceFileId"`
+	SourceText    string `json:"sourceText"`
+	Prompt        string `json:"prompt"`
+	Title         string `json:"title"`
+}
+
+// ResumeTweakEdit is the PATCH body (subset of the full row that's
+// user-editable post-creation). Empty fields mean "don't change".
+type ResumeTweakEdit struct {
+	Title     *string `json:"title,omitempty"`
+	UserEdits *string `json:"userEdits,omitempty"`
+}
+
 // FunnelEntry is one stage's count in the public-analytics funnel.
 type FunnelEntry struct {
 	Stage string `json:"stage"`
@@ -274,5 +325,23 @@ var validStages = map[string]struct{}{
 
 func isValidStage(s string) bool {
 	_, ok := validStages[s]
+	return ok
+}
+
+// validSources enforces the source enum. Empty string is accepted —
+// users routinely save applications without remembering exactly where
+// they found the JD. Otherwise must match one of these literal values;
+// the FE select uses the same set.
+var validSources = map[string]struct{}{
+	"":             {},
+	"LINKEDIN":     {},
+	"NAUKRI":       {},
+	"REFERRAL":     {},
+	"COMPANY_SITE": {},
+	"OTHER":        {},
+}
+
+func isValidSource(s string) bool {
+	_, ok := validSources[s]
 	return ok
 }

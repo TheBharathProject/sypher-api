@@ -28,6 +28,19 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	// URL validation — closes Naukri Clear §8.4 (their LinkedIn field
+	// accepted "hasdkjaamc" and rendered a broken public profile link).
+	// Empty values pass (these are all optional).
+	for field, val := range map[string]string{
+		"linkedinUrl": in.LinkedinURL,
+		"githubUrl":   in.GithubURL,
+		"websiteUrl":  in.WebsiteURL,
+	} {
+		if err := ValidateURL(val); err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_input", field+": "+err.Error())
+			return
+		}
+	}
 	if err := h.store.UpdateProfile(r.Context(), uid, in); err != nil {
 		writeDBError(w, err)
 		return
@@ -307,6 +320,10 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "name required")
 		return
 	}
+	if err := ValidateURL(in.Link); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "link: "+err.Error())
+		return
+	}
 	p, err := h.store.CreateProject(r.Context(), uid, in)
 	if err != nil {
 		writeDBError(w, err)
@@ -323,6 +340,10 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var in ProjectInput
 	if !readJSON(w, r, &in) {
+		return
+	}
+	if err := ValidateURL(in.Link); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "link: "+err.Error())
 		return
 	}
 	p, err := h.store.UpdateProject(r.Context(), uid, id, in)

@@ -84,6 +84,13 @@ type Config struct {
 	// plus endpoint responds 503 service_unavailable and the frontend's
 	// Premium+ card is hidden.
 	RazorpayPlanIDPlus    string
+
+	// Slack incoming-webhook URL for feedback delivery. Optional — when
+	// blank, feedback is persisted to job_tracker.feedback only (the
+	// existing behaviour). When set, every successful feedback POST
+	// also fans out a short message to this webhook so we see ideas /
+	// bug reports in real time without polling the DB.
+	SlackFeedbackWebhookURL string
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -111,7 +118,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_TTL: %w", err)
 	}
 
-	aiLimit, err := parseInt64(envWithDefault("AI_USAGE_MONTHLY_TOKEN_LIMIT", "1000000"))
+	// 25k tokens is the free monthly quota. Beyond this, AI calls fall
+	// back to the paid credits balance — see internal/billing/costs.go
+	// for per-operation pricing.
+	aiLimit, err := parseInt64(envWithDefault("AI_USAGE_MONTHLY_TOKEN_LIMIT", "25000"))
 	if err != nil {
 		return nil, fmt.Errorf("AI_USAGE_MONTHLY_TOKEN_LIMIT: %w", err)
 	}
@@ -160,6 +170,8 @@ func Load() (*Config, error) {
 		RazorpayWebhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"),
 		RazorpayPlanID:        os.Getenv("RAZORPAY_PLAN_ID"),
 		RazorpayPlanIDPlus:    os.Getenv("RAZORPAY_PLAN_ID_PLUS"),
+
+		SlackFeedbackWebhookURL: os.Getenv("SLACK_FEEDBACK_WEBHOOK_URL"),
 	}
 
 	if len(missing) > 0 {

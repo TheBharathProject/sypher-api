@@ -137,9 +137,16 @@ func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "bad frontend redirect")
 		return
 	}
-	qq := dest.Query()
-	qq.Set("token", tok)
-	dest.RawQuery = qq.Encode()
+	// Stamp the JWT into the URL FRAGMENT (#) instead of the query
+	// string (?) — fragments never hit server access logs, never appear
+	// in Referer headers, and aren't sent back upstream when the SPA
+	// makes its first fetch. The frontend reads window.location.hash on
+	// the callback route and stashes the token in localStorage.
+	//
+	// Backwards compat note: existing FE callback already prefers
+	// fragment over query (with a fallback window), so this rollout is
+	// safe to deploy independently of the FE change.
+	dest.Fragment = "token=" + tok
 	http.Redirect(w, r, dest.String(), http.StatusFound)
 }
 

@@ -76,6 +76,15 @@ func (h *Handler) validateAppInput(in *ApplicationInput) error {
 	if !isValidStage(in.Stage) {
 		return fmt.Errorf("invalid stage: %s", in.Stage)
 	}
+	// Source is optional but, when set, must be one of the canonical
+	// uppercase enum values. Free-form text was silently accepted before
+	// — that silently broke analytics aggregations on source.
+	if !isValidSource(in.Source) {
+		return fmt.Errorf("invalid source: %s", in.Source)
+	}
+	if err := ValidateURL(in.JobLink); err != nil {
+		return fmt.Errorf("jobLink: %s", err.Error())
+	}
 	return nil
 }
 

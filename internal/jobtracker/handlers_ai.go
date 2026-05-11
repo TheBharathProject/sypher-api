@@ -15,6 +15,7 @@ import (
 
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
+	"github.com/TheBharathProject/sypher-api/internal/billing"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 )
 
@@ -25,6 +26,63 @@ func (h *Handler) requireAI(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+// gateAICredit enforces the two-tier billing model used by every paid
+// AI endpoint:
+//
+//  1. Free monthly token quota (AI_USAGE_MONTHLY_TOKEN_LIMIT, default
+//     25,000). Until this is exhausted, the call is free.
+//  2. Paid credits balance. Once the free quota is exhausted, debit
+//     `cost` credits via billing.Store.SpendCredits.
+//
+// Returns:
+//   - "free" when the free quota covers the call (no credits debited).
+//   - "credits" when free quota was exhausted and `cost` was debited.
+//   - error otherwise. The handler writes the appropriate response and
+//     returns; the AI call must NOT proceed.
+//
+// Callers MUST gate before any Deepseek call so over-quota users get a
+// clean 402 without burning tokens. The free-quota usage is still
+// recorded after a successful AI call via aiUsage.Record — credits
+// debiting happens inside this gate, atomically.
+func (h *Handler) gateAICredit(w http.ResponseWriter, r *http.Request, uid uuid.UUID, cost int, reason string) (mode string, ok bool) {
+	err := h.aiUsage.EnforceLimit(r.Context(), uid)
+	if err == nil {
+		return "free", true
+	}
+	if !errors.Is(err, ai.ErrUsageExceeded) {
+		h.logger.Error("ai usage check", "err", err, "user_id", uid)
+		httpx.WriteError(w, http.StatusInternalServerError, "usage_check_failed", err.Error())
+		return "", false
+	}
+
+	// Free quota exhausted. Try to debit credits.
+	if h.billingStore == nil {
+		// Billing not configured — fall back to the historical behaviour:
+		// 429 once free quota is gone. Lets dev deployments without
+		// Razorpay keep working.
+		httpx.WriteError(w, http.StatusTooManyRequests, "usage_exceeded",
+			"monthly AI usage limit exceeded")
+		return "", false
+	}
+
+	if _, err := h.billingStore.SpendCredits(r.Context(), uid, cost, reason, "ai", uuid.Nil); err != nil {
+		if errors.Is(err, billing.ErrInsufficientCredits) {
+			httpx.WriteJSON(w, http.StatusPaymentRequired, map[string]any{
+				"error":    "insufficient_credits",
+				"message":  "free monthly tokens exhausted; not enough credits to cover this call",
+				"cost":     cost,
+				"reason":   reason,
+				"topUpURL": "/upgrade#credits",
+			})
+			return "", false
+		}
+		h.logger.Error("spend credits", "err", err, "user_id", uid, "cost", cost, "reason", reason)
+		httpx.WriteError(w, http.StatusInternalServerError, "credits_debit_failed", err.Error())
+		return "", false
+	}
+	return "credits", true
 }
 
 // ----------------------------------------------------------------------------
@@ -162,13 +220,7 @@ func (h *Handler) GenerateResumeReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.aiUsage.EnforceLimit(r.Context(), uid); err != nil {
-		if errors.Is(err, ai.ErrUsageExceeded) {
-			httpx.WriteError(w, http.StatusTooManyRequests, "usage_exceeded",
-				"monthly AI usage limit exceeded")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, "usage_check_failed", err.Error())
+	if _, ok := h.gateAICredit(w, r, uid, billing.CostResumeReport, billing.ReasonResumeReport); !ok {
 		return
 	}
 
@@ -274,13 +326,7 @@ func (h *Handler) GenerateCoverLetter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.aiUsage.EnforceLimit(r.Context(), uid); err != nil {
-		if errors.Is(err, ai.ErrUsageExceeded) {
-			httpx.WriteError(w, http.StatusTooManyRequests, "usage_exceeded",
-				"monthly AI usage limit exceeded")
-			return
-		}
-		httpx.WriteError(w, http.StatusInternalServerError, "usage_check_failed", err.Error())
+	if _, ok := h.gateAICredit(w, r, uid, billing.CostCoverLetter, billing.ReasonCoverLetter); !ok {
 		return
 	}
 

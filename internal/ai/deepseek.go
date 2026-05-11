@@ -155,3 +155,31 @@ Output the letter only, no preamble.`
 	user := fmt.Sprintf("Job description:\n%s\n\n---\n\nCandidate resume:\n%s", jobDescription, resumeText)
 	return c.complete(ctx, system, user, 0.6)
 }
+
+// ResumeTweak rewrites the candidate's resume so it lands harder for a
+// specific JD or cover-letter context. Returns the full rewritten resume
+// in Markdown — the user (and the FE) can diff against source_text to
+// see what changed.
+//
+// Style discipline matches CoverLetter: no platitudes, no inflated
+// adjectives, factual edits only.
+func (c *Client) ResumeTweak(ctx context.Context, sourceResume, prompt string) (*CompletionResult, error) {
+	const system = `You are a senior career coach editing a candidate's resume for a specific role.
+
+Rules:
+- Preserve every factual claim from the original resume. Do NOT invent
+  jobs, dates, metrics, or technologies. Only edit phrasing, ordering,
+  emphasis, and section structure.
+- Re-rank the candidate's bullets so the most relevant points for THIS
+  role appear first within each section.
+- Tighten language: prefer concrete numbers and verbs; drop adjectives
+  like "passionate", "innovative", "robust".
+- Match keywords from the prompt (JD or cover letter) where the original
+  resume already supports them. Don't keyword-stuff.
+- Keep the structure as familiar resume sections: Summary, Experience,
+  Projects, Education, Skills. Use Markdown headings.
+
+Return ONLY the rewritten resume in Markdown. No preamble, no explanation.`
+	user := fmt.Sprintf("Context (job description or cover letter):\n%s\n\n---\n\nOriginal resume:\n%s", prompt, sourceResume)
+	return c.complete(ctx, system, user, 0.4)
+}

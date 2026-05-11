@@ -37,6 +37,48 @@ func NewHandler(store *Store, client *Client, planID, planIDPlus string, logger 
 	return &Handler{store: store, client: client, planID: planID, planIDPlus: planIDPlus, logger: logger}
 }
 
+// requireNoActivePremium short-circuits with 409 if the user already
+// holds an active premium that isn't on a cancel-at-period-end track.
+//
+// Reused by the three premium-granting checkout handlers (standard
+// recurring, plus recurring, one-time pass). Without this guard, a
+// Pro user can mint orphan sub_xxx / order_xxx rows at Razorpay AND
+// fresh 'pending' rows in billing.subscriptions just by replaying
+// the checkout call — the §8.5 abuse path called out in the audit.
+//
+// Cancel-at-period-end users ARE allowed through: they've already
+// indicated they want to stop, so re-subscribing (or switching tier)
+// is a legitimate "changed my mind" flow.
+//
+// Credits top-ups intentionally skip this check — buying more credits
+// while already premium is normal usage.
+func (h *Handler) requireNoActivePremium(w http.ResponseWriter, r *http.Request, uid uuid.UUID) bool {
+	existing, err := h.store.CurrentSubscription(r.Context(), uid)
+	if err != nil {
+		h.logger.Error("check existing subscription", "err", err, "user_id", uid)
+		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return false
+	}
+	if existing == nil || existing.CancelAtPeriodEnd {
+		return true
+	}
+	body := map[string]any{
+		"error":          "already_subscribed",
+		"message":        "you already have an active premium subscription; cancel auto-renewal first to switch tiers",
+		"subscriptionId": existing.ID,
+		"kind":           existing.Kind,
+		"planTier":       existing.PlanTier,
+	}
+	if existing.RazorpaySubscriptionID != nil {
+		body["razorpaySubscriptionId"] = *existing.RazorpaySubscriptionID
+	}
+	if existing.RazorpayOrderID != nil {
+		body["razorpayOrderId"] = *existing.RazorpayOrderID
+	}
+	httpx.WriteJSON(w, http.StatusConflict, body)
+	return false
+}
+
 // CheckoutSubscription starts a recurring premium flow. Creates a
 // Razorpay subscription tied to the configured RAZORPAY_PLAN_ID, mints
 // a 'pending' row in billing.subscriptions, and returns the public
@@ -51,6 +93,9 @@ func (h *Handler) CheckoutSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := auth.MustUserID(r.Context())
+	if !h.requireNoActivePremium(w, r, uid) {
+		return
+	}
 
 	// 12 cycles authorises a year of monthly charges; eMandates have a
 	// max-amount and max-cycle limit, and 12 is the comfortable middle.
@@ -92,6 +137,9 @@ func (h *Handler) CheckoutSubscriptionPlus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	uid := auth.MustUserID(r.Context())
+	if !h.requireNoActivePremium(w, r, uid) {
+		return
+	}
 
 	notes := map[string]string{
 		"kind":      "recurring_premium",
@@ -129,6 +177,9 @@ func (h *Handler) CheckoutPremiumPass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := auth.MustUserID(r.Context())
+	if !h.requireNoActivePremium(w, r, uid) {
+		return
+	}
 
 	notes := map[string]string{
 		"kind":    "one_time_premium",

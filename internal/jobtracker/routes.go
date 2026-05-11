@@ -39,7 +39,11 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("GET", "/job-tracker/applications/check-link", h.CheckApplicationByLink)
 	g("GET", "/job-tracker/applications/{id}", h.GetApplication)
 	g("GET", "/job-tracker/applications/{id}/timeline", h.ApplicationTimeline)
+	// PUT historically; PATCH is the REST-correct verb for partial updates.
+	// Both are registered for one release window so deployed FE + extension
+	// clients keep working. Prefer PATCH in new code.
 	g("PUT", "/job-tracker/applications/{id}", h.UpdateApplication)
+	g("PATCH", "/job-tracker/applications/{id}", h.UpdateApplication)
 	g("DELETE", "/job-tracker/applications/{id}", h.DeleteApplication)
 
 	// Notes
@@ -50,11 +54,13 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("DELETE", "/job-tracker/notes/categories/{id}", h.DeleteCategory)
 	g("GET", "/job-tracker/notes/{id}", h.GetNote)
 	g("PUT", "/job-tracker/notes/{id}", h.UpdateNote)
+	g("PATCH", "/job-tracker/notes/{id}", h.UpdateNote)
 	g("DELETE", "/job-tracker/notes/{id}", h.DeleteNote)
 
 	// Profile root
 	g("GET", "/job-tracker/profile", h.GetProfile)
 	g("PUT", "/job-tracker/profile", h.UpdateProfile)
+	g("PATCH", "/job-tracker/profile", h.UpdateProfile)
 	g("GET", "/job-tracker/profile/slug", h.GetSlug)
 	g("GET", "/job-tracker/profile/slug/check", h.CheckSlug)
 	g("PATCH", "/job-tracker/profile/slug", h.UpdateSlug)
@@ -64,16 +70,19 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("GET", "/job-tracker/profile/experiences", h.ListExperiences)
 	g("POST", "/job-tracker/profile/experiences", h.CreateExperience)
 	g("PUT", "/job-tracker/profile/experiences/{id}", h.UpdateExperience)
+	g("PATCH", "/job-tracker/profile/experiences/{id}", h.UpdateExperience)
 	g("DELETE", "/job-tracker/profile/experiences/{id}", h.DeleteExperience)
 
 	g("GET", "/job-tracker/profile/educations", h.ListEducations)
 	g("POST", "/job-tracker/profile/educations", h.CreateEducation)
 	g("PUT", "/job-tracker/profile/educations/{id}", h.UpdateEducation)
+	g("PATCH", "/job-tracker/profile/educations/{id}", h.UpdateEducation)
 	g("DELETE", "/job-tracker/profile/educations/{id}", h.DeleteEducation)
 
 	g("GET", "/job-tracker/profile/projects", h.ListProjects)
 	g("POST", "/job-tracker/profile/projects", h.CreateProject)
 	g("PUT", "/job-tracker/profile/projects/{id}", h.UpdateProject)
+	g("PATCH", "/job-tracker/profile/projects/{id}", h.UpdateProject)
 	g("DELETE", "/job-tracker/profile/projects/{id}", h.DeleteProject)
 
 	g("GET", "/job-tracker/profile/skills", h.ListSkills)
@@ -105,6 +114,15 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("GET", "/job-tracker/ai/resume/report/latest", h.LatestResumeReport)
 	g("POST", "/job-tracker/ai/cover-letter", h.GenerateCoverLetter)
 	g("GET", "/job-tracker/ai/usage", h.AIUsage)
+
+	// Resume tweaks — versioned AI rewrites. POST charges 20 credits
+	// once the 25k-token free monthly quota is exhausted. List/get/patch/
+	// delete are free. Schema: migrations/0015_resume_tweaks.sql.
+	g("POST", "/job-tracker/ai/resume/tweaks", h.CreateResumeTweak)
+	g("GET", "/job-tracker/ai/resume/tweaks", h.ListResumeTweaks)
+	g("GET", "/job-tracker/ai/resume/tweaks/{id}", h.GetResumeTweak)
+	g("PATCH", "/job-tracker/ai/resume/tweaks/{id}", h.PatchResumeTweak)
+	g("DELETE", "/job-tracker/ai/resume/tweaks/{id}", h.DeleteResumeTweak)
 
 	// ----- Phase 3: community -----
 	g("GET", "/job-tracker/community/{surface}", h.ListCommunity)

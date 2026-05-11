@@ -12,6 +12,7 @@ import (
 
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
+	"github.com/TheBharathProject/sypher-api/internal/billing"
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 	"github.com/TheBharathProject/sypher-api/internal/storage"
@@ -22,14 +23,15 @@ import (
 // them nil and the corresponding endpoints respond 503 (or skip the
 // side-effect, as with notifier).
 type Handler struct {
-	cfg       *config.Config
-	store     *Store
-	authStore *auth.Store
-	logger    *slog.Logger
-	r2        *storage.R2
-	ai        *ai.Client
-	aiUsage   *ai.UsageStore
-	notifier  Notifier
+	cfg          *config.Config
+	store        *Store
+	authStore    *auth.Store
+	logger       *slog.Logger
+	r2           *storage.R2
+	ai           *ai.Client
+	aiUsage      *ai.UsageStore
+	notifier     Notifier
+	billingStore *billing.Store // nil when billing isn't configured; AI fallback to credits is skipped
 }
 
 func NewHandler(cfg *config.Config, store *Store, authStore *auth.Store, logger *slog.Logger) *Handler {
@@ -55,6 +57,15 @@ func (h *Handler) WithAI(c *ai.Client, u *ai.UsageStore) *Handler {
 // directly. See ADR-001 D8.
 func (h *Handler) WithNotifier(n Notifier) *Handler {
 	h.notifier = n
+	return h
+}
+
+// WithBilling attaches the billing store so AI handlers can fall back to
+// the paid credits balance after the free monthly token quota is exhausted.
+// When unset, AI handlers stay free-tier-only and respond 429 once over
+// the token cap (same as before billing landed).
+func (h *Handler) WithBilling(bs *billing.Store) *Handler {
+	h.billingStore = bs
 	return h
 }
 
@@ -105,11 +116,16 @@ func pathUUID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, b
 	return id, true
 }
 
-// writeDBError maps common DB errors to HTTP responses.
+// writeDBError maps common DB errors to HTTP responses. Internal-server
+// branch sends an opaque message to the client and logs full details
+// server-side — the previous behaviour of echoing err.Error() leaked
+// table names, column names, and constraint text, which is both a
+// security smell and unhelpful for users.
 func writeDBError(w http.ResponseWriter, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
 		return
 	}
-	httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+	slog.Error("db error", "err", err)
+	httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 }

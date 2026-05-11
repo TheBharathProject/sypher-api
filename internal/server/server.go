@@ -131,6 +131,9 @@ func (s *Server) routes() http.Handler {
 	billingClient := billing.NewClient(s.cfg.RazorpayKeyID, s.cfg.RazorpayKeySecret)
 	billingHandler := billing.NewHandler(billingStore, billingClient, s.cfg.RazorpayPlanID, s.cfg.RazorpayPlanIDPlus, s.logger)
 	billingWebhook := billing.NewWebhookHandler(billingStore, s.cfg.RazorpayWebhookSecret, s.logger)
+	// Make billing available to the job-tracker handler so AI endpoints
+	// can fall back to paid credits after the free monthly token quota.
+	jtHandler.WithBilling(billingStore)
 	if billingClient != nil {
 		// Log both plan ids so a missing plus plan is obvious at boot.
 		// The plus tier is optional — when blank, the corresponding
