@@ -22,6 +22,32 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA (post SDE, TASK-22) — commit 9dedb10
+
+### What was built (TASK-22)
+
+1. **`job-tracker/app/globals.css`** — new CSS custom properties added to `:root`:
+   - `--bg-hover`, `--accent-soft` (UI hover/accent utilities)
+   - `--font-mono` (monospace font stack)
+   - `--radius-sm: 4px`, `--radius-2xl: 16px`
+   - 7 kanban stage tint tokens: `--stage-interested`, `--stage-applied`, `--stage-phone`, `--stage-technical`, `--stage-onsite`, `--stage-offer-tint`, `--stage-rejected`
+   - Dark-theme mirrors added to `[data-theme="dark"]` for all color tokens above.
+
+2. **`job-tracker/app/applications/page.tsx`** — kanban stage-dot `background:` expression expanded from 4 hardcoded hex values to a full 7-arm ternary using `var(--stage-*)` tokens. JSX structure unchanged.
+
+3. **`job-tracker/components/ui.tsx`** — `MetricCard` `<h3>` numeric value element now has `style={{ fontFamily: 'var(--font-mono)' }}`. Only that element changed; label and detail paragraphs unchanged.
+
+**What QA should test:**
+- Applications kanban view: stage-dot colors render correctly for all 7 stages (INTERESTED, APPLIED, PHONE_SCREEN, TECHNICAL, ONSITE, OFFER, REJECTED)
+- Toggle dark mode: stage-dot colors switch to dark tints (deep blues/greens/purples rather than light pastels)
+- Dashboard MetricCard values (e.g. "12 Applications") render in monospace font
+- No visual regressions on kanban column layout, pill badges, or any other component using `--stage-*` tokens
+
+**What Security should review:**
+- Pure CSS and JSX presentation changes. No new API calls, no data paths modified, no user input processed. No security implications.
+
+---
+
 ## Current Handoff — To: QA + Security (post SDE, TASK-09 through TASK-13)
 
 ### What was built (TASK-09, TASK-10, TASK-11, TASK-12, TASK-13) — commit 3459e79

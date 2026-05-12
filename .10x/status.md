@@ -64,11 +64,11 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-14 | Realign enum constants (OUTCOMES, TARGET_ROLES, EXPERIENCE_LEVELS, ROUND_TYPES) — deploy after TASK-13 | S | SDE frontend | Pending |
-| TASK-15 | Wire filter/sort buttons to URL query state | M | SDE frontend | Pending |
-| TASK-16 | Author chip links to `/u/{authorSlug}` | S | SDE frontend | Pending |
-| TASK-17 | Fix community recruiter list from API, remove seed data (B5) | S | SDE frontend | Pending |
-| TASK-18 | Populate "Link to tracked application" select in experience modal | S | SDE frontend | Pending |
+| TASK-14 | Realign enum constants (OUTCOMES, TARGET_ROLES, EXPERIENCE_LEVELS, ROUND_TYPES) — deploy after TASK-13 | S | SDE frontend | Done (c012718) |
+| TASK-15 | Wire filter/sort buttons to URL query state | M | SDE frontend | Done (c012718) |
+| TASK-16 | Author chip links to `/u/{authorSlug}` | S | SDE frontend | Done (c012718) |
+| TASK-17 | Fix community recruiter list from API, remove seed data (B5) | S | SDE frontend | Done (c012718) |
+| TASK-18 | Populate "Link to tracked application" select in experience modal | S | SDE frontend | Done (c012718) |
 | TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Done — already `type="url"` on all three fields (lines 668, 677, 686); `pnpm tsc --noEmit` passes zero errors |
 
 ### Milestone 4 — Phase 10: AI PDFs
@@ -82,7 +82,7 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-22 | CSS design tokens + stage color tokens + MetricCard mono | S | SDE frontend | Pending |
+| TASK-22 | CSS design tokens + stage color tokens + MetricCard mono | S | SDE frontend | Done (9dedb10) |
 | TASK-23 | ModalShell + FocusScope — all 8 modal sites in one PR | XL | SDE frontend | Pending |
 
 ### Milestone 6 — Phase 15: Mobile CSS

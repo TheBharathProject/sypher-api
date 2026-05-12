@@ -1,8 +1,8 @@
 # SDE Decision — pegasus-gap-analysis
 
 **Date:** 2026-05-12
-**Commit:** f0ca0f9 (prior), 3459e79 (TASK-09 through TASK-13)
-**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12, TASK-13, TASK-25
+**Commit:** f0ca0f9 (prior), 3459e79 (TASK-09 through TASK-13), 9dedb10 (TASK-22)
+**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12, TASK-13, TASK-22, TASK-25
 
 ---
 
@@ -318,3 +318,101 @@ Three changes:
 |---|---|---|
 | Cursor pagination ignores sort mode | Low | `writeListResponse` always uses `CreatedAt` for the next cursor regardless of sort. Sort tabs should reset to page 1 on sort change (frontend responsibility). Documented in code comment. |
 | `validateCommunityMetadata` uses `map[string]any` for experiences/reviews | Low | `json.Unmarshal` into `map[string]any` for experiences and reviews surfaces (instead of a typed struct) to avoid defining 4 per-surface structs. The type assertion `meta["outcome"].(string)` is safe because the zero value for a missing key is nil which fails the type assertion and passes validation. No runtime panic risk. |
+
+---
+
+### TASK-22 — CSS design tokens, stage colors, MetricCard monospace
+
+**Files modified:**
+- `job-tracker/app/globals.css`
+- `job-tracker/app/applications/page.tsx`
+- `job-tracker/components/ui.tsx`
+
+#### Part 1 — globals.css: new tokens
+
+**Tokens added to `:root`:**
+- `--bg-hover: rgba(0,0,0,0.04)` — light hover overlay
+- `--accent-soft: rgba(99,102,241,0.12)` — soft indigo accent wash
+- `--font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace`
+- `--radius-sm: 4px`
+- `--radius-2xl: 16px`
+- `--stage-interested: #e0f2fe` — kanban tint, one per stage
+- `--stage-applied: #dbeafe`
+- `--stage-phone: #fef9c3`
+- `--stage-technical: #fed7aa`
+- `--stage-onsite: #f3e8ff`
+- `--stage-offer-tint: #dcfce7` (see deviation note below)
+- `--stage-rejected: #fee2e2`
+
+**Tokens added to `[data-theme="dark"]`:**
+- `--bg-hover: rgba(255,255,255,0.06)`
+- `--accent-soft: rgba(99,102,241,0.20)`
+- `--stage-interested: #1e3a5f`
+- `--stage-applied: #1e3a5f`
+- `--stage-phone: #3d3010`
+- `--stage-technical: #3d1a00`
+- `--stage-onsite: #2e1a47`
+- `--stage-offer-tint: #14301e`
+- `--stage-rejected: #3d1414`
+
+**Tokens not added because they already existed in `:root`:**
+- `--radius-xl`, `--radius-lg`, `--radius-md` — all present
+- `--font-sans-stack`, `--font-serif-stack` — present
+- `--stage-interest`, `--stage-screen`, `--stage-offer`, `--stage-offer-ink` — pre-existing (different token names, different purpose: pill tones not kanban tints)
+
+#### Part 2 — applications/page.tsx: stage-dot color replacement
+
+**What existed (lines 753–763):**
+```
+stage === "INTERESTED" ? "#b9a87f"
+  : stage === "OFFER" ? "#62c18b"
+  : stage === "REJECTED" ? "#ef6f6c"
+  : "#9094ff"
+```
+Four buckets, three stages collapsed into one.
+
+**What replaced it:** Full 7-way ternary mapping each stage to `var(--stage-*)`. The fallback arm uses `var(--stage-interested)` (same logic as before — "interested" is the lightest/default color).
+
+No JSX restructuring — only the `background:` expression was changed.
+
+#### Part 3 — components/ui.tsx: MetricCard monospace
+
+**What existed:**
+```tsx
+<h3>{value}</h3>
+```
+
+**What replaced it:**
+```tsx
+<h3 style={{ fontFamily: 'var(--font-mono)' }}>{value}</h3>
+```
+
+Only the numeric value element (`<h3>`) was touched. The `label` and `detail` paragraphs are unchanged.
+
+---
+
+## Deviations from plan (TASK-22)
+
+| Deviation | Reason |
+|---|---|
+| Used `--stage-offer-tint` instead of `--stage-offer` for the kanban offer column | The codebase already has `--stage-offer: #d9f7e0` in `:root`, used by `.tone-stage-offer` pill class. Adding `--stage-offer` with a new value `#dcfce7` would silently override the pill background. Named the kanban token `--stage-offer-tint` to keep both tokens co-existing. The two hex values differ only slightly (`#d9f7e0` vs `#dcfce7`); this is a safe trade-off. |
+| Stage-dot fallback arm uses `var(--stage-interested)` not a hardcoded hex | The original fallback `"#9094ff"` (purple) was a catch-all for APPLIED/PHONE/TECHNICAL/ONSITE. Since each of those stages now has its own arm, the fallback is theoretically unreachable. Using `var(--stage-interested)` as the unreachable fallback is safe and avoids leaving a dangling hardcoded hex. |
+| `--font-mono` and `--radius-sm`/`--radius-2xl` not added to `[data-theme="dark"]` | These are non-color tokens. Font stacks and border radii have no dark-mode variants — no override needed. |
+
+## Tech debt created (TASK-22)
+
+| Item | Severity | Notes |
+|---|---|---|
+| `--stage-offer` and `--stage-offer-tint` are two tokens for similar colors | Low | The existing `--stage-offer` serves pill backgrounds; the new `--stage-offer-tint` serves kanban column dots. When the pill system is unified in TASK-23 or a future cleanup, these can be merged into one token. |
+
+## Test coverage notes (TASK-22)
+
+No new tests required — TASK-22 is pure CSS and JSX presentation changes. TypeScript check confirms zero new errors introduced.
+
+Pre-existing TS errors in `app/community/[section]/page.tsx` (lines 361, 383 — `sort` property on pagination options type) were present before this session and are not caused by TASK-22.
+
+## Commit hashes (continued)
+
+| Commit | Description |
+|---|---|
+| `9dedb10` | feat(design): CSS tokens, stage colors, MetricCard monospace |
