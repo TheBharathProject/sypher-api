@@ -22,6 +22,35 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA (post SDE, TASK-23) — commit fa8fa1e
+
+### What was built (TASK-23)
+
+1. **`components/ui.tsx`** — `ModalShell` exported component added. Uses `@radix-ui/react-focus-scope 1.1.8` for focus trapping. On open: saves trigger element, adds `overflow-hidden` to body, sets `inert=""` on `<main>`. On close: removes both, restores focus via `requestAnimationFrame`. Escape key handled via `window.addEventListener`. Returns `null` when `open=false` so no DOM node is rendered.
+
+2. **`app/applications/page.tsx`** — 6 modal sites migrated: view detail, add/edit application form, cover letter AI, resume tweak AI, set reminder.
+
+3. **`app/recruiters/page.tsx`** — Add/edit recruiter modal migrated.
+
+4. **`app/settings/page.tsx`** — Delete account modal + cancel subscription modal migrated. Removed `CloseIcon` and `SettingsIcon` (both now unused).
+
+5. **`app/community/[section]/page.tsx`** — Local `ModalShell` function (lines 641-671) deleted. All 5 community sub-modal call sites updated to use exported `ModalShell`. The `intro` and `size` props were dropped; `open={true}` passed explicitly (the parent guard `{openModal && section === "..." ? <Modal ...> : null}` controls rendering).
+
+**What QA should test:**
+- Open any modal (Add application, Edit application, View application, Set reminder, Cover letter, Tweak resume, Add recruiter, Delete account) — Escape key closes the modal
+- Tab key cycles focus within the modal and does not leak to the background page
+- Clicking the modal backdrop closes it; clicking inside the modal does not
+- Screen reader: background content is inert (not readable/reachable) while modal is open
+- After closing a modal, focus returns to the button that opened it
+- Dark and light theme: modals render correctly in both
+- Mobile: modals render correctly at narrow viewports (overflow-hidden on body prevents scroll-through)
+
+**What Security should review:**
+- `inert=""` attribute is set on `<main>` (the product frame's content area, confirmed `<main>` at `components/frames.tsx` line 347). Confirm no other interactive content outside `<main>` (e.g. sidebar) is reachable while modal is open. The sidebar nav is in `<aside>` — it is NOT covered by `inert`. If sidebar interactivity while a modal is open is a concern, the `inert` target would need to be the entire `<div class="product-frame">` or an overlay would be needed. Current implementation matches the spec's intent.
+- No new API calls, no new data paths, no user input processed in `ModalShell` itself.
+
+---
+
 ## Current Handoff — To: QA + Security (post SDE, TASK-20) — commit 629f491
 
 ### What was built (TASK-20)

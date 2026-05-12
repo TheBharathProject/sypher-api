@@ -83,7 +83,7 @@
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
 | TASK-22 | CSS design tokens + stage color tokens + MetricCard mono | S | SDE frontend | Done (9dedb10) |
-| TASK-23 | ModalShell + FocusScope — all 8 modal sites in one PR | XL | SDE frontend | Pending |
+| TASK-23 | ModalShell + FocusScope — all 8 modal sites in one PR | XL | SDE frontend | Done (fa8fa1e) |
 
 ### Milestone 6 — Phase 15: Mobile CSS
 
