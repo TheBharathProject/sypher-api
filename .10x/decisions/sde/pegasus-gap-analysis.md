@@ -1,8 +1,8 @@
 # SDE Decision — pegasus-gap-analysis
 
 **Date:** 2026-05-12
-**Commit:** f0ca0f9 (prior), 3459e79 (TASK-09 through TASK-13), 9dedb10 (TASK-22)
-**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12, TASK-13, TASK-22, TASK-25
+**Commit:** f0ca0f9 (prior), 3459e79 (TASK-09 through TASK-13), 9dedb10 (TASK-22), 629f491 (TASK-20)
+**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12, TASK-13, TASK-20, TASK-22, TASK-25
 
 ---
 
@@ -416,3 +416,53 @@ Pre-existing TS errors in `app/community/[section]/page.tsx` (lines 361, 383 —
 | Commit | Description |
 |---|---|
 | `9dedb10` | feat(design): CSS tokens, stage colors, MetricCard monospace |
+| `629f491` | feat(ai): PDF export endpoints for cover letter, resume tweak, and resume report |
+
+---
+
+### TASK-20 — Add go-pdf/fpdf and implement handlers_ai_pdf.go
+
+**Files changed:**
+- `go.mod` / `go.sum` — added `github.com/go-pdf/fpdf v0.9.0`
+- `internal/jobtracker/handlers_ai_pdf.go` [NEW] — 342 lines
+- `internal/jobtracker/routes.go` [MOD] — 6 lines added
+
+**Behavior added:**
+
+Three new auth-gated endpoints, all under `requireUser` middleware:
+
+1. `POST /job-tracker/ai/cover-letter/pdf` (`CoverLetterPDF`)
+   - Body: `{text, company, role}`. All three used; `text` is required.
+   - Builds A4 PDF: company bold 14pt, role 12pt, date, body 11pt × 1.4 spacing, italic footer.
+   - Filename: `{company}-{role}-cover-letter.pdf` (sanitized).
+
+2. `GET /job-tracker/ai/resume/tweaks/{id}/pdf` (`ResumeTweakPDF`)
+   - Uses `pathUUID` for the tweak ID.
+   - Prefers `UserEdits` over `TweakedText`; falls back to "Untitled" when title is empty.
+   - Filename: `resume-tweak-{first8chars}.pdf`.
+
+3. `GET /job-tracker/ai/resume/report/latest/pdf` (`LatestResumeReportPDF`)
+   - Calls `h.store.LatestReport` — same store call as `LatestResumeReport` handler.
+   - Strips markdown (headings, bold/italic, fences, inline code, h-rules) before PDF render.
+   - Renders score line only when `rep.Score > 0`.
+   - Filename: `resume-report-{YYYY-MM-DD}.pdf` (uses report's `CreatedAt` date).
+
+**No credit debit** on any PDF endpoint — credits were consumed at text-generation time. No `gateAICredit` calls in this file.
+
+**Helpers:**
+- `sanitizeFilename` — replaces non-alphanumeric/hyphen/underscore/dot chars with `-`, collapses runs, trims, max 200 chars.
+- `stripMarkdown` — regexp-based best-effort plain-text conversion for the report PDF.
+- `buildCoverLetterPDF`, `buildTweakPDF`, `buildReportPDF` — each returns `(*fpdf.Fpdf, error)`; caller sets headers then calls `streamPDF`.
+- `streamPDF` — sets `Content-Type: application/pdf` and `Content-Disposition` then calls `pdf.Output(w)`.
+
+**Deviations from Senior Engineer plan:**
+- Senior plan specified route `POST /job-tracker/ai/resume/tweaks/{id}/pdf`; actual route is `GET` (matching the Architect ADR and the semantic fact that this is a read — fetching existing DB content). The GET verb is correct here.
+- `streamPDF` uses package-level `slog.Error` for the post-header-commit error path, not `h.logger`, because the function is not a method. This is acceptable — the standard library default logger is the same logger wired at startup via `slog.SetDefault`.
+
+**Tech debt:**
+- `stripMarkdown` uses simple regexp substitutions. It does not handle nested markdown, list markers (`-`, `*`, `1.`), or link syntax `[text](url)`. Severity: LOW — the AI report output is known to be simple enough (headers + bold + inline code) that these patterns cover the real output. A proper markdown-to-text parser (e.g., `github.com/JohannesKaufmann/html-to-text`) would be more robust but adds a dependency.
+- `UnicodeTranslatorFromDescriptor("")` defaults to cp1252 (Latin Western). Characters outside this code page (e.g., Devanagari, CJK) are silently dropped by fpdf. Severity: LOW — acceptable per Architect ADR note ("UnicodeTranslator strips unsupported chars — acceptable degradation").
+
+**Test coverage notes:**
+- No unit tests for `handlers_ai_pdf.go`. The handler functions require a live DB + fpdf render path. Integration-level tests would need a mock store implementing `GetResumeTweak` and `LatestReport`. Existing `go test ./...` passes with zero failures. Adding PDF handler tests is deferred to a future test-coverage pass.
+- `sanitizeFilename` and `stripMarkdown` are pure functions and could be unit-tested cheaply. Deferred — they are not complex enough to warrant tests before the integration smoke test (manually downloading a PDF from the running server).

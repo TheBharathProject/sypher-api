@@ -22,6 +22,40 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA + Security (post SDE, TASK-20) — commit 629f491
+
+### What was built (TASK-20)
+
+1. **`go.mod` / `go.sum`** — added `github.com/go-pdf/fpdf v0.9.0` (pure Go, no system deps)
+
+2. **`internal/jobtracker/handlers_ai_pdf.go`** [NEW] — three auth-gated PDF export handlers:
+   - `CoverLetterPDF` (`POST /job-tracker/ai/cover-letter/pdf`) — body `{text, company, role}`. Requires `text`. Returns A4 PDF with company/role header and body text.
+   - `ResumeTweakPDF` (`GET /job-tracker/ai/resume/tweaks/{id}/pdf`) — fetches tweak row from DB; uses `UserEdits` if set, else `TweakedText`.
+   - `LatestResumeReportPDF` (`GET /job-tracker/ai/resume/report/latest/pdf`) — fetches latest report; strips markdown before rendering; includes score line when `score > 0`.
+
+3. **`internal/jobtracker/routes.go`** [MOD] — three new routes added inside the `requireUser`-gated block.
+
+**No credits debited** by any PDF endpoint — PDF is free export of already-generated content.
+
+**What QA should test:**
+- `POST /job-tracker/ai/cover-letter/pdf` with `{text: "Dear...", company: "Google", role: "SDE"}` — browser downloads `Google-SDE-cover-letter.pdf`; PDF is readable and contains the text
+- `POST /job-tracker/ai/cover-letter/pdf` with empty `text` — returns `400 bad_input`
+- `GET /job-tracker/ai/resume/tweaks/{valid-id}/pdf` — downloads a PDF containing the tweak content
+- `GET /job-tracker/ai/resume/tweaks/{nonexistent-id}/pdf` — returns `404`
+- `GET /job-tracker/ai/resume/tweaks/{id-belonging-to-another-user}/pdf` — returns `404` (tenant isolation)
+- `GET /job-tracker/ai/resume/report/latest/pdf` with a user who has a report — downloads PDF with "Resume Analysis Report" heading and score line
+- `GET /job-tracker/ai/resume/report/latest/pdf` with a user who has no report — returns `404`
+- Unauthenticated requests to all three endpoints — return `401`
+
+**What Security should review:**
+- `Content-Disposition` filename comes through `sanitizeFilename` which allowlists `[a-zA-Z0-9._\-]` — no path traversal or header injection possible. Confirm the regexp covers all edge cases.
+- `ResumeTweakPDF` calls `h.store.GetResumeTweak(uid, tweakID)` — tenant isolation enforced by the store query `WHERE id = $1 AND user_id = $2`. Verify the store function is the existing one (not a new unauthenticated variant).
+- `LatestResumeReportPDF` calls `h.store.LatestReport(uid)` — already tenant-isolated in the existing store function.
+- `stripMarkdown` uses regexp on AI-generated text only, not on user-supplied file content. No injection surface.
+- No `gateAICredit` calls — confirm this is intentional per the decision doc (credits were paid at generation time).
+
+---
+
 ## Current Handoff — To: QA (post SDE, TASK-22) — commit 9dedb10
 
 ### What was built (TASK-22)
