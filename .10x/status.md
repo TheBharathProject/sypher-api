@@ -76,7 +76,7 @@
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
 | TASK-20 | `go-pdf/fpdf` + `handlers_ai_pdf.go` — 3 PDF endpoints | L | SDE backend | Done (629f491) |
-| TASK-21 | Frontend "Download PDF" / "Download report" buttons | M | SDE frontend | Pending |
+| TASK-21 | Frontend "Download PDF" / "Download report" buttons | M | SDE frontend | Done (c4a0af0) |
 
 ### Milestone 5 — Phase 14: Design System
 
