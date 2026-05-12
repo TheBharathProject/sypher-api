@@ -34,12 +34,22 @@
 
 | Phase | Feature | Priority | Recommended order |
 |---|---|---|---|
+| community-slugs | Human-readable slugs on community post URLs | P1 | 0th — ships with Phase 12 |
 | 12 backend | Community sort indexes + per-surface metadata validation | Medium | 1st |
 | 12 frontend | Enum realignment, filter URL state, sort tabs | Medium | 2nd |
 | 10 | AI PDFs (go-pdf/fpdf) + Avatar upload (files table kind='avatar') | High | 3rd |
 | 14 CSS | Design tokens, kanban tints | Medium | 4th |
 | 14 a11y | ModalShell, focus trap (@radix-ui/react-focus-scope), inert | Medium | 5th |
 | 15 | Mobile breakpoints, iOS Safari modal, hover gating, touch targets | Low | 6th |
+
+## Slug feature spec
+
+`.10x/specs/2026-05-12-community-post-slugs.md` — full spec including:
+- Migration `0019_community_slugs.sql` (backfill + unique index)
+- `slugify()` + `uniqueSlug()` logic in new `internal/jobtracker/slug.go`
+- Dual-path lookup: UUID or slug both work (backward compat)
+- Frontend: 1 line change in community list + `slug: string` in `ApiCommunityPost`
+- Effort: ~half a day
 
 ## CTO ADR
 
@@ -49,6 +59,15 @@
 - Highest risk item: Phase 14 ModalShell refactor (8 modal sites, do in one PR)
 - Critical tech debt: internal/jobtracker has only 1 test file (mentions_test.go); no handler/store tests
 
-## Open questions
+## Open questions (need answers before Phase 2 / Architect dispatch)
 
-None — sequencing and build/buy decisions are resolved in the ADR.
+| Q# | Question | Options |
+|---|---|---|
+| Q1 | GitHub + Discord links in Settings — old Naukri Clear branding, never ported | (a) link to Pegasus-branded repos/Discord (b) leave out of v1.0 |
+| Q2 | Community `OUTCOMES` enum drift — old posts may have "Rejected"/"In Progress" vs correct "Reject"/"InProgress" | (a) coerce on read (b) hard-reject new writes only (c) DB migration to normalize first |
+| Q3 | Avatar upload — block v1.0 launch or ship as initials-fallback and add post-launch? | (a) block v1.0 (b) post-launch |
+
+## CI fix (pending push)
+
+`go.mod` was updated by `go mod tidy` — `golang.org/x/time` promoted from `// indirect` to direct.
+Push with: `git add go.mod go.sum && git commit -m "fix: promote golang.org/x/time to direct dependency" && git push`
