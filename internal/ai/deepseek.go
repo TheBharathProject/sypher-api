@@ -123,7 +123,13 @@ func (c *Client) complete(ctx context.Context, system, user string, temp float64
 
 // ResumeReport produces a structured Markdown review of the given resume text.
 func (c *Client) ResumeReport(ctx context.Context, resumeText string) (*CompletionResult, error) {
-	const system = `You are a senior career coach. Review the candidate's resume and return Markdown with these sections in order:
+	return c.ResumeReportWithContext(ctx, resumeText, "", "", "")
+}
+
+// ResumeReportWithContext is ResumeReport with optional level / role / job
+// description injected into the prompt for more targeted feedback.
+func (c *Client) ResumeReportWithContext(ctx context.Context, resumeText, level, targetRole, jobDescription string) (*CompletionResult, error) {
+	const baseSys = `You are a senior career coach. Review the candidate's resume and return Markdown with these sections in order:
 
 ## Summary
 A 2-3 sentence high-level read.
@@ -141,6 +147,18 @@ A 2-3 sentence high-level read.
 Give a single integer score from 0 to 100 inside backticks like ` + "`82`" + ` (this exact format - one line, just the number in backticks).
 
 Be specific and actionable. Avoid generic advice.`
+
+	var extra strings.Builder
+	if level != "" {
+		extra.WriteString(fmt.Sprintf("\nTarget experience level: %s.", level))
+	}
+	if targetRole != "" {
+		extra.WriteString(fmt.Sprintf("\nTarget role: %s.", targetRole))
+	}
+	if jobDescription != "" {
+		extra.WriteString(fmt.Sprintf("\n\nJob description the candidate is targeting:\n%s", jobDescription))
+	}
+	system := baseSys + extra.String()
 	return c.complete(ctx, system, resumeText, 0.4)
 }
 

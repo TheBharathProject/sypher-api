@@ -124,6 +124,7 @@ OPTIONAL_VARS=(
   RAZORPAY_WEBHOOK_SECRET
   RAZORPAY_PLAN_ID
   RAZORPAY_PLAN_ID_PLUS
+  SLACK_FEEDBACK_WEBHOOK_URL
 )
 
 # Warn (don't fail) on missing optionals so a half-configured deploy is loud.

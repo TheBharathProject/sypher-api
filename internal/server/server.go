@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/time/rate"
 
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
@@ -168,6 +169,11 @@ func (s *Server) routes() http.Handler {
 			NextFire: jobs.AtIST(4, 0),
 			Run:      jobs.ExpireOneTimePremium(billingStore, s.logger),
 		},
+		cron.Job{
+			Name:     "fire-reminders",
+			NextFire: jobs.EveryN(5 * time.Minute),
+			Run:      jobs.FireDueReminders(jtStore, notifier, s.logger),
+		},
 	)
 
 	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
@@ -182,8 +188,21 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /billing/me", requireUser(http.HandlerFunc(billingHandler.GetMe)))
 	mux.Handle("POST /webhooks/razorpay", billingWebhook) // public, signature-verified
 
+	// Per-user rate limiters. Applied via path-prefix check so we don't
+	// need to thread the limiter through RegisterRoutes.
+	//   aiLimiter:     AI + billing checkout endpoints (5 req/min, burst 10)
+	//   importLimiter: CSV import (1 req/min, burst 1)
+	aiLimiter := newLimiterMap(5*rate.Every(time.Minute), 10)
+	importLimiter := newLimiterMap(rate.Every(time.Minute), 1)
+	aiRL := withUserRateLimit(aiLimiter)
+	importRL := withUserRateLimit(importLimiter)
+
 	// Compose middleware. Outer wrappers run first.
+	// Path-keyed rate limiting sits inside CORS/logging so it can read
+	// the authenticated user from the request context.
 	var h http.Handler = mux
+	h = withPathRateLimit(h, aiRL, "/job-tracker/ai/", "/billing/checkout/")
+	h = withPathRateLimit(h, importRL, "/job-tracker/applications/import")
 	h = withCORS(h, s.cfg.CORSOrigins)
 	h = withLogging(h, s.logger)
 	h = withRecover(h, s.logger)

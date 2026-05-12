@@ -2,6 +2,7 @@ package jobtracker
 
 import (
 	"fmt"
+	"net/mail"
 	"net/url"
 	"strings"
 )
@@ -32,4 +33,10 @@ func ValidateURL(raw string) error {
 		return fmt.Errorf("URL is missing a host")
 	}
 	return nil
+}
+
+// parseEmail validates an email address using net/mail. Returns the parsed
+// address on success; returns an error when the input is not a valid address.
+func parseEmail(s string) (*mail.Address, error) {
+	return mail.ParseAddress(s)
 }

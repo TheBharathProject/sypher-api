@@ -51,6 +51,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/notes", h.CreateNote)
 	g("GET", "/job-tracker/notes/categories", h.ListCategories)
 	g("POST", "/job-tracker/notes/categories", h.CreateCategory)
+	g("PATCH", "/job-tracker/notes/categories/{id}", h.UpdateCategory)
 	g("DELETE", "/job-tracker/notes/categories/{id}", h.DeleteCategory)
 	g("GET", "/job-tracker/notes/{id}", h.GetNote)
 	g("PUT", "/job-tracker/notes/{id}", h.UpdateNote)
@@ -123,6 +124,21 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("GET", "/job-tracker/ai/resume/tweaks/{id}", h.GetResumeTweak)
 	g("PATCH", "/job-tracker/ai/resume/tweaks/{id}", h.PatchResumeTweak)
 	g("DELETE", "/job-tracker/ai/resume/tweaks/{id}", h.DeleteResumeTweak)
+
+	// Personal Recruiters — private CRM, distinct from /community/recruiters.
+	g("GET", "/job-tracker/recruiters", h.ListRecruiters)
+	g("POST", "/job-tracker/recruiters", h.CreateRecruiter)
+	g("GET", "/job-tracker/recruiters/{id}", h.GetRecruiter)
+	g("PATCH", "/job-tracker/recruiters/{id}", h.PatchRecruiter)
+	g("DELETE", "/job-tracker/recruiters/{id}", h.DeleteRecruiter)
+
+	// Reminders — per-application time-based nudges.
+	// The every-5-min cron job fires notifications when triggers_at passes.
+	g("POST", "/job-tracker/applications/{id}/reminders", h.CreateReminder)
+	g("GET", "/job-tracker/applications/{id}/reminders", h.ListAppReminders)
+	g("GET", "/job-tracker/reminders", h.ListReminders)
+	g("PATCH", "/job-tracker/reminders/{id}", h.PatchReminder)
+	g("DELETE", "/job-tracker/reminders/{id}", h.DeleteReminder)
 
 	// ----- Phase 3: community -----
 	g("GET", "/job-tracker/community/{surface}", h.ListCommunity)

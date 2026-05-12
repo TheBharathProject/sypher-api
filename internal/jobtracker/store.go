@@ -2,6 +2,7 @@ package jobtracker
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -116,6 +117,22 @@ type ListAppsOpts struct {
 	Stage  string
 	Source string
 	Search string
+	// Cursor pagination. Cursor is (created_at, id) from the last row;
+	// empty means "first page". Limit 0 means "use default (50)".
+	Limit  int
+	Cursor *AppCursor
+}
+
+// AppCursor is a (created_at, id) keyset cursor for stable, gap-free pagination.
+type AppCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// ApplicationPage is the envelope returned by ListApplications.
+type ApplicationPage struct {
+	Items      []Application `json:"items"`
+	NextCursor *string       `json:"nextCursor,omitempty"`
 }
 
 // applicationCols is the canonical SELECT list for an Application row.
@@ -138,7 +155,18 @@ func scanApplication(row pgx.Row, a *Application) error {
 		&a.Stale, &a.StageChangedAt, &a.CreatedAt, &a.UpdatedAt)
 }
 
-func (s *Store) ListApplications(ctx context.Context, userID uuid.UUID, opts ListAppsOpts) ([]Application, error) {
+const defaultAppsLimit = 50
+const maxAppsLimit = 200
+
+func (s *Store) ListApplications(ctx context.Context, userID uuid.UUID, opts ListAppsOpts) (*ApplicationPage, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = defaultAppsLimit
+	}
+	if limit > maxAppsLimit {
+		limit = maxAppsLimit
+	}
+
 	q := `SELECT ` + applicationCols + ` FROM job_tracker.applications WHERE user_id = $1`
 	args := []any{userID}
 	if opts.Stage != "" {
@@ -153,7 +181,12 @@ func (s *Store) ListApplications(ctx context.Context, userID uuid.UUID, opts Lis
 		args = append(args, "%"+opts.Search+"%")
 		q += fmt.Sprintf(" AND (company ILIKE $%d OR role ILIKE $%d OR COALESCE(location,'') ILIKE $%d)", len(args), len(args), len(args))
 	}
-	q += " ORDER BY created_at DESC"
+	if opts.Cursor != nil {
+		args = append(args, opts.Cursor.CreatedAt, opts.Cursor.ID)
+		q += fmt.Sprintf(" AND (created_at, id) < ($%d, $%d)", len(args)-1, len(args))
+	}
+	args = append(args, limit+1)
+	q += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", len(args))
 
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
@@ -161,7 +194,7 @@ func (s *Store) ListApplications(ctx context.Context, userID uuid.UUID, opts Lis
 	}
 	defer rows.Close()
 
-	out := make([]Application, 0)
+	out := make([]Application, 0, limit)
 	for rows.Next() {
 		var a Application
 		if err := scanApplication(rows, &a); err != nil {
@@ -169,7 +202,46 @@ func (s *Store) ListApplications(ctx context.Context, userID uuid.UUID, opts Lis
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	page := &ApplicationPage{Items: out}
+	if len(out) > limit {
+		// We fetched one extra to detect a next page; trim it off.
+		page.Items = out[:limit]
+		last := page.Items[limit-1]
+		cur := encodeCursor(last.CreatedAt, last.ID.String())
+		page.NextCursor = &cur
+	}
+	return page, nil
+}
+
+// encodeCursor base64-encodes "created_at|id" as a stable opaque cursor.
+func encodeCursor(createdAt, id string) string {
+	raw := createdAt + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeCursor reverses encodeCursor.
+func decodeCursor(encoded string) (*AppCursor, error) {
+	b, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("bad cursor")
+	}
+	t, err := time.Parse(time.RFC3339, parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("bad cursor time: %w", err)
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("bad cursor id: %w", err)
+	}
+	return &AppCursor{CreatedAt: t, ID: id}, nil
 }
 
 func (s *Store) GetApplication(ctx context.Context, userID, id uuid.UUID) (*Application, error) {
@@ -606,6 +678,20 @@ func (s *Store) CreateCategory(ctx context.Context, userID uuid.UUID, in Categor
 	`
 	var c Category
 	if err := s.pool.QueryRow(ctx, q, userID, in.Name, in.Color).Scan(&c.ID, &c.Name, &c.Color); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Store) UpdateCategory(ctx context.Context, userID, id uuid.UUID, name, color string) (*Category, error) {
+	const q = `
+		UPDATE job_tracker.note_categories
+		SET name = $3, color = NULLIF($4,'')
+		WHERE id = $1 AND user_id = $2
+		RETURNING id, name, COALESCE(color,'')
+	`
+	var c Category
+	if err := s.pool.QueryRow(ctx, q, id, userID, name, color).Scan(&c.ID, &c.Name, &c.Color); err != nil {
 		return nil, err
 	}
 	return &c, nil

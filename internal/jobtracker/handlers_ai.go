@@ -174,8 +174,11 @@ func extractPDF(data []byte) string {
 // ----------------------------------------------------------------------------
 
 type reportInput struct {
-	FileID string `json:"fileId"`
-	Text   string `json:"text"`
+	FileID         string `json:"fileId"`
+	Text           string `json:"text"`
+	Level          string `json:"level"`
+	TargetRole     string `json:"targetRole"`
+	JobDescription string `json:"jobDescription"`
 }
 
 func (h *Handler) GenerateResumeReport(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +227,7 @@ func (h *Handler) GenerateResumeReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.ai.ResumeReport(r.Context(), resumeText)
+	res, err := h.ai.ResumeReportWithContext(r.Context(), resumeText, in.Level, in.TargetRole, in.JobDescription)
 	if err != nil {
 		h.logger.Error("ai report", "err", err)
 		httpx.WriteError(w, http.StatusBadGateway, "ai_failed", err.Error())

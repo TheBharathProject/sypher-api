@@ -18,16 +18,25 @@ import (
 func (h *Handler) ListApplications(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
 	q := r.URL.Query()
-	apps, err := h.store.ListApplications(r.Context(), uid, ListAppsOpts{
+	opts := ListAppsOpts{
 		Stage:  q.Get("stage"),
 		Source: q.Get("source"),
 		Search: q.Get("search"),
-	})
+	}
+	if raw := q.Get("cursor"); raw != "" {
+		cur, err := decodeCursor(raw)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_cursor", "invalid cursor")
+			return
+		}
+		opts.Cursor = cur
+	}
+	page, err := h.store.ListApplications(r.Context(), uid, opts)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, apps)
+	httpx.WriteJSON(w, http.StatusOK, page)
 }
 
 // CheckApplicationByLink answers "do I already have this job link in my
@@ -208,7 +217,7 @@ var appImportTemplateHeader = []string{
 // ExportApplications streams the user's applications as CSV.
 func (h *Handler) ExportApplications(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
-	apps, err := h.store.ListApplications(r.Context(), uid, ListAppsOpts{})
+	page, err := h.store.ListApplications(r.Context(), uid, ListAppsOpts{Limit: maxAppsLimit})
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -217,7 +226,7 @@ func (h *Handler) ExportApplications(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="applications.csv"`)
 	cw := csv.NewWriter(w)
 	_ = cw.Write(appCSVHeader)
-	for _, a := range apps {
+	for _, a := range page.Items {
 		_ = cw.Write([]string{
 			a.Company, a.Role, a.Source, a.Location, a.SalaryRange, a.Stage,
 			a.AppliedAt, a.ApplyDeadline, a.JobLink, a.JobDescription, a.Notes,

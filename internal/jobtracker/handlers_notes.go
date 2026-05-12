@@ -118,6 +118,28 @@ func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, c)
 }
 
+func (h *Handler) UpdateCategory(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var in CategoryInput
+	if !readJSON(w, r, &in) {
+		return
+	}
+	if in.Name == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "name is required")
+		return
+	}
+	c, err := h.store.UpdateCategory(r.Context(), uid, id, in.Name, in.Color)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, c)
+}
+
 func (h *Handler) DeleteCategory(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
 	id, ok := pathUUID(w, r, "id")

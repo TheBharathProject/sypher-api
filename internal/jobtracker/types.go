@@ -345,3 +345,64 @@ func isValidSource(s string) bool {
 	_, ok := validSources[s]
 	return ok
 }
+
+// Reminder is the full row exposed via the reminders endpoints.
+type Reminder struct {
+	ID            string  `json:"id"`
+	ApplicationID string  `json:"applicationId"`
+	TriggersAt    string  `json:"triggersAt"`
+	Note          *string `json:"note,omitempty"`
+	FiredAt       *string `json:"firedAt,omitempty"`
+	CreatedAt     string  `json:"createdAt"`
+	UpdatedAt     string  `json:"updatedAt"`
+}
+
+// ReminderInput is the POST body for creating a reminder.
+type ReminderInput struct {
+	TriggersAt string  `json:"triggersAt"`
+	Note       *string `json:"note,omitempty"`
+}
+
+// ReminderEdit is the PATCH body.
+type ReminderEdit struct {
+	TriggersAt *string `json:"triggersAt,omitempty"`
+	Note       *string `json:"note,omitempty"`
+}
+
+// DueReminder is a minimal row used by the reminders cron job.
+type DueReminder struct {
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	ApplicationID uuid.UUID
+	Note          *string
+}
+
+// Recruiter is a personal (private) recruiter contact.
+type Recruiter struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Email       string  `json:"email"`
+	Company     *string `json:"company,omitempty"`
+	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Notes       *string `json:"notes,omitempty"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
+}
+
+// RecruiterInput is the POST body.
+type RecruiterInput struct {
+	Name        string  `json:"name"`
+	Email       string  `json:"email"`
+	Company     *string `json:"company,omitempty"`
+	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Notes       *string `json:"notes,omitempty"`
+}
+
+// RecruiterEdit is the PATCH body (all optional).
+type RecruiterEdit struct {
+	Name        *string `json:"name,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	Company     *string `json:"company,omitempty"`
+	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Notes       *string `json:"notes,omitempty"`
+}
