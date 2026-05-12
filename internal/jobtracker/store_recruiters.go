@@ -11,11 +11,11 @@ import (
 
 func (s *Store) CreateRecruiter(ctx context.Context, userID uuid.UUID, in RecruiterInput) (*Recruiter, error) {
 	const q = `
-		INSERT INTO job_tracker.recruiters (user_id, name, email, company, linkedin_url, notes)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, name, email, company, linkedin_url, notes, created_at, updated_at
+		INSERT INTO job_tracker.recruiters (user_id, name, email, company, linkedin_url, phone, notes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, name, email, company, linkedin_url, phone, notes, created_at, updated_at
 	`
-	row := s.pool.QueryRow(ctx, q, userID, in.Name, in.Email, in.Company, in.LinkedinURL, in.Notes)
+	row := s.pool.QueryRow(ctx, q, userID, in.Name, in.Email, in.Company, in.LinkedinURL, in.Phone, in.Notes)
 	return scanRecruiter(row)
 }
 
@@ -26,7 +26,7 @@ func (s *Store) ListRecruiters(ctx context.Context, userID uuid.UUID, search str
 	)
 	if search != "" {
 		const q = `
-			SELECT id, name, email, company, linkedin_url, notes, created_at, updated_at
+			SELECT id, name, email, company, linkedin_url, phone, notes, created_at, updated_at
 			FROM job_tracker.recruiters
 			WHERE user_id = $1
 			  AND (name ILIKE '%' || $2 || '%' OR company ILIKE '%' || $2 || '%' OR email ILIKE '%' || $2 || '%')
@@ -35,7 +35,7 @@ func (s *Store) ListRecruiters(ctx context.Context, userID uuid.UUID, search str
 		rows, err = s.pool.Query(ctx, q, userID, search)
 	} else {
 		const q = `
-			SELECT id, name, email, company, linkedin_url, notes, created_at, updated_at
+			SELECT id, name, email, company, linkedin_url, phone, notes, created_at, updated_at
 			FROM job_tracker.recruiters
 			WHERE user_id = $1
 			ORDER BY name ASC
@@ -63,7 +63,7 @@ func (s *Store) ListRecruiters(ctx context.Context, userID uuid.UUID, search str
 
 func (s *Store) GetRecruiter(ctx context.Context, userID, id uuid.UUID) (*Recruiter, error) {
 	const q = `
-		SELECT id, name, email, company, linkedin_url, notes, created_at, updated_at
+		SELECT id, name, email, company, linkedin_url, phone, notes, created_at, updated_at
 		FROM job_tracker.recruiters
 		WHERE id = $1 AND user_id = $2
 	`
@@ -77,16 +77,18 @@ func (s *Store) PatchRecruiter(ctx context.Context, userID, id uuid.UUID, in Rec
 			email        = COALESCE($4, email),
 			company      = CASE WHEN $5::boolean THEN $6 ELSE company END,
 			linkedin_url = CASE WHEN $7::boolean THEN $8 ELSE linkedin_url END,
-			notes        = CASE WHEN $9::boolean THEN $10 ELSE notes END,
+			phone        = CASE WHEN $9::boolean THEN $10 ELSE phone END,
+			notes        = CASE WHEN $11::boolean THEN $12 ELSE notes END,
 			updated_at   = NOW()
 		WHERE id = $1 AND user_id = $2
-		RETURNING id, name, email, company, linkedin_url, notes, created_at, updated_at
+		RETURNING id, name, email, company, linkedin_url, phone, notes, created_at, updated_at
 	`
 	row := s.pool.QueryRow(ctx, q,
 		id, userID,
 		in.Name, in.Email,
 		in.Company != nil, in.Company,
 		in.LinkedinURL != nil, in.LinkedinURL,
+		in.Phone != nil, in.Phone,
 		in.Notes != nil, in.Notes,
 	)
 	return scanRecruiter(row)
@@ -125,12 +127,12 @@ func scanRecruiter(row interface{ Scan(...any) error }) (*Recruiter, error) {
 
 func scanRecruiterCols(scan func(...any) error) (*Recruiter, error) {
 	var (
-		id                   uuid.UUID
-		name, email          string
-		company, linkedinURL, notes *string
-		creAt, updAt         time.Time
+		id                              uuid.UUID
+		name, email                     string
+		company, linkedinURL, phone, notes *string
+		creAt, updAt                    time.Time
 	)
-	if err := scan(&id, &name, &email, &company, &linkedinURL, &notes, &creAt, &updAt); err != nil {
+	if err := scan(&id, &name, &email, &company, &linkedinURL, &phone, &notes, &creAt, &updAt); err != nil {
 		return nil, err
 	}
 	return &Recruiter{
@@ -139,6 +141,7 @@ func scanRecruiterCols(scan func(...any) error) (*Recruiter, error) {
 		Email:       email,
 		Company:     company,
 		LinkedinURL: linkedinURL,
+		Phone:       phone,
 		Notes:       notes,
 		CreatedAt:   creAt.UTC().Format(time.RFC3339),
 		UpdatedAt:   updAt.UTC().Format(time.RFC3339),

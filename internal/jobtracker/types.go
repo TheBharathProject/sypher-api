@@ -384,6 +384,7 @@ type Recruiter struct {
 	Email       string  `json:"email"`
 	Company     *string `json:"company,omitempty"`
 	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Phone       *string `json:"phone,omitempty"`
 	Notes       *string `json:"notes,omitempty"`
 	CreatedAt   string  `json:"createdAt"`
 	UpdatedAt   string  `json:"updatedAt"`
@@ -395,6 +396,7 @@ type RecruiterInput struct {
 	Email       string  `json:"email"`
 	Company     *string `json:"company,omitempty"`
 	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Phone       *string `json:"phone,omitempty"`
 	Notes       *string `json:"notes,omitempty"`
 }
 
@@ -404,5 +406,6 @@ type RecruiterEdit struct {
 	Email       *string `json:"email,omitempty"`
 	Company     *string `json:"company,omitempty"`
 	LinkedinURL *string `json:"linkedinUrl,omitempty"`
+	Phone       *string `json:"phone,omitempty"`
 	Notes       *string `json:"notes,omitempty"`
 }
