@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-12
 **Commit:** f0ca0f9
-**Tasks:** TASK-01, TASK-02, TASK-25
+**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-25
 
 ---
 
@@ -142,6 +142,32 @@ The `pathUUID` call for UpdateCommunityPost, DeleteCommunityPost, FlagCommunityP
 
 ---
 
+### TASK-07 — Add slug: string to ApiCommunityPost in lib/api-client.ts
+
+**File modified:** `job-tracker/lib/api-client.ts`
+
+**What existed:** `ApiCommunityPost` at lines 330–346 had `authorSlug?: string` (optional, already present) but no `slug` field.
+
+**Change made:** Added `slug: string;` (required, non-optional) on line 335, immediately after `authorSlug?: string;` and before the `surface` field. This matches the SELECT order in the backend (`communityPostCols` puts `COALESCE(pf.slug,'')` then `p.slug` then `p.surface`).
+
+**Why non-optional:** Every post in the DB has a slug after the TASK-03 migration backfill. Making it required (`string` not `string | undefined`) lets TypeScript catch any consumer that fails to handle it.
+
+---
+
+### TASK-08 — Wire community post card links to post.slug
+
+**File modified:** `job-tracker/app/community/[section]/page.tsx`
+
+**What existed:** Line 494: `href={`/community/posts/${post.id}`}` — used UUID id in all post card links.
+
+**Change made:** Line 494 changed to `href={`/community/posts/${post.slug || post.id}`}` — uses slug with id as defensive fallback for any post where slug is unexpectedly empty string (TypeScript type says `string` but the fallback costs nothing and guards against a future empty-string migration edge case).
+
+**JSX not restructured:** Only the template literal value was changed. No elements added, removed, or reordered.
+
+**No other `post.id` href usages were found in the same file** — confirmed by reading the surrounding render block (lines 491–515). The only post-row Link is at line 494.
+
+---
+
 ## Deviations from plan
 
 | Deviation | Reason |
@@ -194,3 +220,4 @@ go build ./...
 |---|---|
 | `f0ca0f9` | fix(billing): write current_period_end on webhook + 409 guard on re-subscription |
 | `abed2a3` | feat(jobtracker): community post slugs — migration, slug.go, dual-path lookup |
+| `7c5e01f` | feat(community): use slug in post links, add slug type to ApiCommunityPost |

@@ -47,8 +47,8 @@
 | TASK-04 | `slug.go` — `slugify()` + `Store.uniqueSlug()` with collision retry | S | SDE backend | Done (abed2a3) |
 | TASK-05 | `slug_test.go` (required) | S | SDE backend | Done (abed2a3) — 13 tests passing |
 | TASK-06 | Wire slugs into store + handlers (dual-path lookup) | M | SDE backend | Done (abed2a3) |
-| TASK-07 | Add `slug: string` to `ApiCommunityPost` type | S | SDE frontend | Pending |
-| TASK-08 | Community post card links use `post.slug` | S | SDE frontend | Pending |
+| TASK-07 | Add `slug: string` to `ApiCommunityPost` type | S | SDE frontend | Done (7c5e01f) |
+| TASK-08 | Community post card links use `post.slug` | S | SDE frontend | Done (7c5e01f) |
 
 ### Milestone 2 — Phase 12 Backend
 

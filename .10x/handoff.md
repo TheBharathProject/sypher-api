@@ -24,6 +24,23 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 
 ## Current Handoff — To: QA + Security (post SDE)
 
+### What was built (TASK-07, TASK-08) — commit 7c5e01f
+
+1. **`job-tracker/lib/api-client.ts` line 335** — added `slug: string;` (required, non-optional) to `ApiCommunityPost` type, between `authorSlug?: string` and `surface`. This matches the backend `communityPostCols` SELECT order where `p.slug` appears after `COALESCE(pf.slug,'')` and before `p.surface`.
+
+2. **`job-tracker/app/community/[section]/page.tsx` line 494** — post card `<Link>` href changed from `post.id` to `post.slug || post.id`. The `|| post.id` is a defensive fallback; TypeScript type says `string` (always present) but the fallback costs nothing and handles any unexpected empty-string edge case.
+
+**What QA should test:**
+- Navigate to community section — post card links now use slug-form URLs (e.g. `/community/posts/my-google-l5-interview-went`)
+- Clicking an old bookmarked UUID URL (`/community/posts/{uuid}`) still resolves — the dual-path backend handler (TASK-06) handles both forms
+- No visual/layout change — only the href attribute value changed; JSX structure is unchanged
+
+**What Security should review:**
+- No new API calls, no new data paths. The only change is which field is used to construct a client-side link.
+- `pnpm tsc --noEmit` passes with zero errors — no type unsafety introduced.
+
+---
+
 ### What was built (TASK-03, TASK-04, TASK-05, TASK-06) — commit abed2a3
 
 1. **`migrations/0019_community_slugs.sql`** — adds `slug TEXT NOT NULL` to `job_tracker.community_posts`, backfills existing rows with `'post-' || REPLACE(id::text, '-', '')`, creates a unique index. Transaction-wrapped, idempotent.
