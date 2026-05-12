@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** sypher-api / Pegasus (job-tracking SaaS)
-**Phase:** Planning: EM complete — ready for Senior Engineer + SDE
+**Phase:** Planning Complete — ready for implementation
 **Date:** 2026-05-12
 **Active slug:** `pegasus-gap-analysis`
 
@@ -37,7 +37,7 @@
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
 | TASK-01 | Fix `currentPeriodEnd` null for active subscriptions (B2) | S | SDE backend | Pending |
-| TASK-02 | Add 409 guard to prevent Pro re-subscription (B3) | S | SDE backend | Pending |
+| TASK-02 | Add 409 guard to prevent Pro re-subscription (B3) | S | SDE backend | Pre-implemented — write regression test only |
 
 ### Milestone 1 — Community Post Slugs
 
@@ -69,7 +69,7 @@
 | TASK-16 | Author chip links to `/u/{authorSlug}` | S | SDE frontend | Pending |
 | TASK-17 | Fix community recruiter list from API, remove seed data (B5) | S | SDE frontend | Pending |
 | TASK-18 | Populate "Link to tracked application" select in experience modal | S | SDE frontend | Pending |
-| TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Pending |
+| TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Pre-implemented — verify and document only |
 
 ### Milestone 4 — Phase 10: AI PDFs
 

@@ -22,7 +22,88 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
-## Current Handoff — To: Senior Engineer + SDE
+## Current Handoff — To: SDE
+
+**Senior Engineer decision document:** `.10x/decisions/senior-engineer/pegasus-gap-analysis.md`
+
+### Pre-implementation discoveries (read before starting)
+
+Two tasks are already done in the current codebase — skip them and write confirmation tests only:
+
+- **TASK-02 (409 guard for re-subscription):** `requireNoActivePremium` already exists in
+  `internal/billing/handlers.go` (lines 55–80) and is already wired to all three checkout handlers.
+  Your job: write the regression test in `billing/handlers_test.go`, document as "verified".
+
+- **TASK-19 (profile URL `type="url"`):** All three URL inputs in `app/profile/page.tsx`
+  (lines 668, 677, 686) already use `type="url"`. Your job: run `pnpm tsc --noEmit`, confirm
+  the browser validation works in-page, document as "verified".
+
+### Critical file locations (verified from source)
+
+| What | Path | Key detail |
+|---|---|---|
+| Billing webhook handler | `internal/billing/webhook.go` | `dispatch()` at line 180; `subscription.activated` at line 185 |
+| Billing store | `internal/billing/store.go` | `ActivateRecurring` line 112; `BumpRecurringPeriodEnd` line 133 |
+| Community store | `internal/jobtracker/store_community.go` | `communityPostCols` line 80; `scanCommunityPost` line 87; `CommunityPost` struct line 21 |
+| Community handler | `internal/jobtracker/handlers_community.go` | `CreateCommunityPost` line 130; `GetCommunityPost` line 176 |
+| AI handler | `internal/jobtracker/handlers_ai.go` | `gateAICredit` line 49; `GenerateCoverLetter` line 291 |
+| Routes | `internal/jobtracker/routes.go` | Add 3 PDF routes after line 126 |
+| Handler struct | `internal/jobtracker/handler.go` | `Handler` struct line 25; `h.logger` is `*slog.Logger` |
+| Validate helpers | `internal/jobtracker/validate.go` | `ValidateURL`, `parseEmail` — new validators go here |
+| Community page | `app/community/[section]/page.tsx` | 1354 lines; `seedRecruiters` line 101; `OUTCOMES` line 126; local `ModalShell` line 596 |
+| API client types | `lib/api-client.ts` | `ApiCommunityPost` at line 330; add `slug: string` after `authorSlug` |
+| Community lib | `lib/community.ts` | `listCommunityPosts` line 25; needs `sort` param |
+| CSS tokens | `app/globals.css` | `:root` block lines 18–52; 10387 lines total; 106 `:hover` rules; 13 `720px` occurrences |
+| UI components | `components/ui.tsx` | 45 lines; add `ModalShell` export here; add `"use client"` directive |
+| ProductFrame main | `components/frames.tsx` | `<main>` at line 347; `document.querySelector("main")` works for `inert` |
+| Applications page | `app/applications/page.tsx` | 1494 lines; cover letter modal line 1089; tweak modal line 1161; kanban stage-dot lines 752–763 |
+| Resume page | `app/resume/page.tsx` | 406 lines; Results step at line 184 |
+
+### Function signatures — new code you must write
+
+```go
+// slug.go
+func slugify(title string) string
+func (s *Store) uniqueSlug(ctx context.Context, title string) (string, error)
+
+// store_community.go
+func (s *Store) GetPostBySlug(ctx context.Context, slug string, viewerID *uuid.UUID) (*CommunityPost, error)
+
+// validators_community.go
+func validateCommunityMetadata(surface string, raw json.RawMessage) *metaValidationError
+type metaValidationError struct { field string; msg string }
+
+// handlers_ai_pdf.go
+func (h *Handler) CoverLetterPDF(w http.ResponseWriter, r *http.Request)
+func (h *Handler) ResumeTweakPDF(w http.ResponseWriter, r *http.Request)
+func (h *Handler) LatestResumeReportPDF(w http.ResponseWriter, r *http.Request)
+func sanitizeFilename(s string) string
+func buildCoverLetterPDF(text, company, role string) *fpdf.Fpdf
+func buildTweakPDF(title, content string) *fpdf.Fpdf
+func buildReportPDF(score int, content string) *fpdf.Fpdf
+```
+
+```typescript
+// lib/api-client.ts
+export async function downloadPDF(endpoint: string, body: Record<string, unknown>, filename: string): Promise<void>
+```
+
+### Non-obvious gotchas checklist
+
+- [ ] `communityPostCols` SELECT order must match `scanCommunityPost` Scan order exactly — adding `p.slug` in the wrong position corrupts silently
+- [ ] `crypto/rand`, NOT `math/rand` in `slug.go` — grep before merge
+- [ ] `Content-Type` + `Content-Disposition` headers MUST be set BEFORE `pdf.Output(w)` — once Output writes, headers are committed
+- [ ] PDF endpoints: NO `gateAICredit` call — credit was paid at text-generation time
+- [ ] TASK-13/TASK-14 deployment order: backend validation first or simultaneous — never frontend first
+- [ ] `validOutcomes` in `validators_community.go`: `"Reject"`, NOT `"Rejected"` — five exact values
+- [ ] Local `ModalShell` in `app/community/[section]/page.tsx` (line 596): DELETE after TASK-23 migration
+- [ ] `globals.css` line 1324 `width: min(100%, 720px)` is NOT a breakpoint — do not change in TASK-24
+- [ ] `globals.css` line 6472 `max-width: 720px` is an element width — do not change in TASK-24
+- [ ] TASK-17 (remove seed recruiters): confirm prod recruiter count > 0 before deploying
+- [ ] `pf.slug` (author profile slug) and `p.slug` (post slug) are DIFFERENT in the JOIN query
+- [ ] `billing.Store` has no interface — mock via tiny wrapper struct for TASK-25 handler tests
+
+## Previous Handoff — To: Senior Engineer + SDE
 
 **EM decision document:** `.10x/decisions/engineering-manager/pegasus-gap-analysis.md`
 
