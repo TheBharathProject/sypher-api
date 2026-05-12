@@ -43,10 +43,10 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-03 | Migration `0019_community_slugs.sql` | S | SDE backend | Pending |
-| TASK-04 | `slug.go` — `slugify()` + `Store.uniqueSlug()` with collision retry | S | SDE backend | Pending |
-| TASK-05 | `slug_test.go` (required) | S | SDE backend | Pending |
-| TASK-06 | Wire slugs into store + handlers (dual-path lookup) | M | SDE backend | Pending |
+| TASK-03 | Migration `0019_community_slugs.sql` | S | SDE backend | Done (abed2a3) |
+| TASK-04 | `slug.go` — `slugify()` + `Store.uniqueSlug()` with collision retry | S | SDE backend | Done (abed2a3) |
+| TASK-05 | `slug_test.go` (required) | S | SDE backend | Done (abed2a3) — 13 tests passing |
+| TASK-06 | Wire slugs into store + handlers (dual-path lookup) | M | SDE backend | Done (abed2a3) |
 | TASK-07 | Add `slug: string` to `ApiCommunityPost` type | S | SDE frontend | Pending |
 | TASK-08 | Community post card links use `post.slug` | S | SDE frontend | Pending |
 
@@ -96,7 +96,7 @@
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
 | TASK-25 | Billing regression tests (B2/B3) | M | SDE backend | Done — 13 tests passing, -race green (f0ca0f9) |
-| TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Pending |
+| TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Partial — TASK-05 (slug tests) done (abed2a3); TASK-12 (validator tests) pending |
 
 ## Slug feature spec
 

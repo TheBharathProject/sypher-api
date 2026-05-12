@@ -24,6 +24,32 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 
 ## Current Handoff — To: QA + Security (post SDE)
 
+### What was built (TASK-03, TASK-04, TASK-05, TASK-06) — commit abed2a3
+
+1. **`migrations/0019_community_slugs.sql`** — adds `slug TEXT NOT NULL` to `job_tracker.community_posts`, backfills existing rows with `'post-' || REPLACE(id::text, '-', '')`, creates a unique index. Transaction-wrapped, idempotent.
+
+2. **`internal/jobtracker/slug.go`** — `slugify(title)` pure function (lowercase, strip non-alphanumeric, trim, replace spaces with hyphens, collapse consecutive hyphens, truncate at 80). `Store.uniqueSlug(ctx, title)` — 5-retry loop with `crypto/rand` suffix. Returns `""` on empty input (caller gets "post" fallback inside uniqueSlug).
+
+3. **`internal/jobtracker/slug_test.go`** — 13 test cases covering the full Staff Engineer test matrix: normal title, special chars, Hindi Unicode drop, truncation, hyphen collapse, empty, and hyphen-boundary truncation.
+
+4. **`internal/jobtracker/store_community.go`** — `CommunityPost.Slug` field added; `communityPostCols` now includes `p.slug`; `scanCommunityPost` scans it at the correct position; `CreatePost` generates a slug via `uniqueSlug` and inserts it; new `GetPostBySlug(ctx, slug, viewerID)` function mirrors `GetPost`.
+
+5. **`internal/jobtracker/handlers_community.go`** — `GetCommunityPost` and `PublicGetCommunityPost` now accept UUID or slug in the `{id}` path param. UUID-first, slug fallback. `ErrNoRows → 404` in both branches.
+
+**What QA should test:**
+- `GET /job-tracker/community/posts/{uuid}` — still returns 200 with the post (backward compat)
+- `GET /job-tracker/community/posts/{slug}` — returns 200 when slug matches a post
+- `GET /job-tracker/community/posts/nonexistent-slug` — returns 404
+- `POST /job-tracker/community/{surface}` — response now includes a `"slug"` field
+- Two posts with the same title get distinct slugs (the 4-char hex suffix fires)
+
+**What Security should review:**
+- `slug.go`: the `uniqueSlug` SELECT is parameterized (`$1`). No raw user input in SQL.
+- The dual-path handler uses `uuid.Parse()` to dispatch — no string injection risk. Slug lookups are fully parameterized.
+- `crypto/rand` is used for the suffix — no `math/rand` in the file.
+
+---
+
 ### What was built (TASK-01, TASK-02, TASK-25) — commit f0ca0f9
 
 **Behavioral changes: none.** Both TASK-01 (currentPeriodEnd write) and TASK-02 (409 guard) were already implemented in production code. This session added regression tests only plus two infrastructure changes to enable testing:
