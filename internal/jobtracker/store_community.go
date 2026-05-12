@@ -47,6 +47,18 @@ type CommunityPostInput struct {
 	IsPublic bool            `json:"isPublic"`
 }
 
+// CommunityUpdateInput is the PATCH body shape. Surface is optional —
+// when present alongside Metadata, the handler runs per-surface validation.
+// Title-only edits (no Surface + no Metadata) skip validation entirely to
+// avoid 400-rejecting existing posts that predate enum alignment.
+type CommunityUpdateInput struct {
+	Surface  string          `json:"surface,omitempty"`
+	Title    string          `json:"title"`
+	Body     string          `json:"body"`
+	Metadata json.RawMessage `json:"metadata"`
+	IsPublic bool            `json:"isPublic"`
+}
+
 type CommunityComment struct {
 	ID         uuid.UUID  `json:"id"`
 	PostID     uuid.UUID  `json:"postId"`
@@ -72,6 +84,7 @@ type CommunityListOpts struct {
 	Limit       int
 	PublicOnly  bool       // /public/community/* sets this true
 	ViewerID    *uuid.UUID // for MyVote computation; nil on public read
+	Sort        string     // "newest" | "votes" | "most-reviewed" — empty defaults to "newest"
 }
 
 // =============================================================================
@@ -151,7 +164,24 @@ func (s *Store) ListPosts(ctx context.Context, surface string, opts CommunityLis
 		args = append(args, opts.Cursor)
 		q += fmt.Sprintf(" AND p.created_at < $%d", len(args))
 	}
-	q += " ORDER BY p.created_at DESC LIMIT $2"
+
+	// allowedSort maps the ?sort= query param to a safe ORDER BY clause.
+	// Values come from a hard-coded Go map, never from raw user input, so
+	// string interpolation here is safe. Unknown or absent sort values fall
+	// back to "newest".
+	// NOTE (v1 trade-off): cursor pagination always uses created_at regardless
+	// of sort mode. Sort tabs should reset to page 1 on sort change since a
+	// created_at cursor is meaningless for votes/comments ordering.
+	allowedSort := map[string]string{
+		"newest":        "p.created_at DESC, p.id DESC",
+		"votes":         "p.vote_count DESC, p.created_at DESC",
+		"most-reviewed": "p.comment_count DESC, p.created_at DESC",
+	}
+	clause, ok := allowedSort[opts.Sort]
+	if !ok {
+		clause = allowedSort["newest"]
+	}
+	q += " ORDER BY " + clause + " LIMIT $2"
 
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {

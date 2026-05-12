@@ -109,6 +109,9 @@ func parseListOpts(r *http.Request) CommunityListOpts {
 			opts.Limit = n
 		}
 	}
+	// Pass the raw sort value through to the store. The store's allowlist map
+	// sanitises it — unknown values fall back to "newest".
+	opts.Sort = r.URL.Query().Get("sort")
 	return opts
 }
 
@@ -155,6 +158,14 @@ func (h *Handler) CreateCommunityPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Body) > 16384 {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "body too long (max 16k chars)")
+		return
+	}
+	if verr := validateCommunityMetadata(surface, in.Metadata); verr != nil {
+		httpx.WriteJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "invalid_metadata",
+			"field":   verr.Field,
+			"message": verr.Message,
+		})
 		return
 	}
 	in.Surface = surface
@@ -234,13 +245,32 @@ func (h *Handler) UpdateCommunityPost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in CommunityPostInput
-	if !readJSON(w, r, &in) {
+	var upd CommunityUpdateInput
+	if !readJSON(w, r, &upd) {
 		return
 	}
-	if in.Title == "" || len(in.Title) > 280 {
+	if upd.Title == "" || len(upd.Title) > 280 {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "title must be 1-280 chars")
 		return
+	}
+	// Only validate metadata when the client sends both surface and metadata.
+	// Title-only edits (surface absent or metadata absent/empty) skip validation
+	// to avoid breaking patches on posts that predate enum alignment.
+	if upd.Surface != "" && len(upd.Metadata) > 2 {
+		if verr := validateCommunityMetadata(upd.Surface, upd.Metadata); verr != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, map[string]string{
+				"error":   "invalid_metadata",
+				"field":   verr.Field,
+				"message": verr.Message,
+			})
+			return
+		}
+	}
+	in := CommunityPostInput{
+		Title:    upd.Title,
+		Body:     upd.Body,
+		Metadata: upd.Metadata,
+		IsPublic: upd.IsPublic,
 	}
 	post, err := h.store.UpdatePost(r.Context(), uid, id, in)
 	if err != nil {
