@@ -23,6 +23,7 @@ type CommunityPost struct {
 	UserID       uuid.UUID       `json:"userId"`
 	AuthorName   string          `json:"authorName"`
 	AuthorSlug   string          `json:"authorSlug,omitempty"`
+	Slug         string          `json:"slug"`
 	Surface      string          `json:"surface"`
 	Title        string          `json:"title"`
 	Body         string          `json:"body,omitempty"`
@@ -78,7 +79,7 @@ type CommunityListOpts struct {
 // =============================================================================
 
 const communityPostCols = `p.id, p.user_id, COALESCE(u.name, ''), COALESCE(pf.slug, ''),
-	p.surface, p.title, COALESCE(p.body, ''),
+	p.slug, p.surface, p.title, COALESCE(p.body, ''),
 	p.metadata, p.is_public, p.vote_count, p.comment_count, p.status,
 	p.created_at, p.updated_at`
 
@@ -87,7 +88,7 @@ const communityPostCols = `p.id, p.user_id, COALESCE(u.name, ''), COALESCE(pf.sl
 func scanCommunityPost(row pgxRowScanner, p *CommunityPost) error {
 	return row.Scan(
 		&p.ID, &p.UserID, &p.AuthorName, &p.AuthorSlug,
-		&p.Surface, &p.Title, &p.Body,
+		&p.Slug, &p.Surface, &p.Title, &p.Body,
 		&p.Metadata, &p.IsPublic, &p.VoteCount, &p.CommentCount, &p.Status,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
@@ -99,11 +100,15 @@ func (s *Store) CreatePost(ctx context.Context, userID uuid.UUID, in CommunityPo
 	if in.Metadata == nil {
 		in.Metadata = json.RawMessage("{}")
 	}
+	slug, err := s.uniqueSlug(ctx, in.Title)
+	if err != nil {
+		return nil, fmt.Errorf("generate slug: %w", err)
+	}
 	const q = `
 		WITH inserted AS (
 			INSERT INTO job_tracker.community_posts
-				(user_id, surface, title, body, metadata, is_public)
-			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6)
+				(user_id, surface, title, body, metadata, is_public, slug)
+			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7)
 			RETURNING *
 		)
 		SELECT ` + communityPostCols + `
@@ -112,7 +117,7 @@ func (s *Store) CreatePost(ctx context.Context, userID uuid.UUID, in CommunityPo
 		LEFT JOIN job_tracker.profiles pf ON pf.user_id = p.user_id
 	`
 	var post CommunityPost
-	if err := scanCommunityPost(s.pool.QueryRow(ctx, q, userID, in.Surface, in.Title, in.Body, in.Metadata, in.IsPublic), &post); err != nil {
+	if err := scanCommunityPost(s.pool.QueryRow(ctx, q, userID, in.Surface, in.Title, in.Body, in.Metadata, in.IsPublic, slug), &post); err != nil {
 		return nil, err
 	}
 	return &post, nil
@@ -195,6 +200,32 @@ func (s *Store) GetPost(ctx context.Context, postID uuid.UUID, viewerID *uuid.UU
 		const vq = `SELECT value FROM job_tracker.community_votes WHERE post_id = $1 AND user_id = $2`
 		var v int16
 		err := s.pool.QueryRow(ctx, vq, postID, *viewerID).Scan(&v)
+		if err == nil {
+			p.MyVote = int(v)
+		}
+	}
+	return &p, nil
+}
+
+// GetPostBySlug fetches a single post by its URL slug + author info.
+// Mirrors GetPost but filters on p.slug = $1 instead of p.id = $1.
+// ViewerID, when non-nil, fills MyVote.
+func (s *Store) GetPostBySlug(ctx context.Context, slug string, viewerID *uuid.UUID) (*CommunityPost, error) {
+	const q = `
+		SELECT ` + communityPostCols + `
+		FROM job_tracker.community_posts p
+		LEFT JOIN auth.users u ON u.id = p.user_id
+		LEFT JOIN job_tracker.profiles pf ON pf.user_id = p.user_id
+		WHERE p.slug = $1
+	`
+	var p CommunityPost
+	if err := scanCommunityPost(s.pool.QueryRow(ctx, q, slug), &p); err != nil {
+		return nil, err
+	}
+	if viewerID != nil {
+		const vq = `SELECT value FROM job_tracker.community_votes WHERE post_id = $1 AND user_id = $2`
+		var v int16
+		err := s.pool.QueryRow(ctx, vq, p.ID, *viewerID).Scan(&v)
 		if err == nil {
 			p.MyVote = int(v)
 		}

@@ -173,13 +173,20 @@ func (h *Handler) CreateCommunityPost(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetCommunityPost GET /job-tracker/community/posts/{id}
+// Accepts either a UUID or a slug in the {id} path parameter.
 func (h *Handler) GetCommunityPost(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
-	id, ok := pathUUID(w, r, "id")
-	if !ok {
-		return
+	idOrSlug := r.PathValue("id")
+
+	var (
+		post *CommunityPost
+		err  error
+	)
+	if parsed, parseErr := uuid.Parse(idOrSlug); parseErr == nil {
+		post, err = h.store.GetPost(r.Context(), parsed, &uid)
+	} else {
+		post, err = h.store.GetPostBySlug(r.Context(), idOrSlug, &uid)
 	}
-	post, err := h.store.GetPost(r.Context(), id, &uid)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "post not found")
@@ -192,12 +199,19 @@ func (h *Handler) GetCommunityPost(w http.ResponseWriter, r *http.Request) {
 }
 
 // PublicGetCommunityPost GET /job-tracker/public/community/posts/{id}
+// Accepts either a UUID or a slug in the {id} path parameter.
 func (h *Handler) PublicGetCommunityPost(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathUUID(w, r, "id")
-	if !ok {
-		return
+	idOrSlug := r.PathValue("id")
+
+	var (
+		post *CommunityPost
+		err  error
+	)
+	if parsed, parseErr := uuid.Parse(idOrSlug); parseErr == nil {
+		post, err = h.store.GetPost(r.Context(), parsed, nil)
+	} else {
+		post, err = h.store.GetPostBySlug(r.Context(), idOrSlug, nil)
 	}
-	post, err := h.store.GetPost(r.Context(), id, nil)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "post not found")
