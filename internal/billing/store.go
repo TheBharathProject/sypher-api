@@ -8,8 +8,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// dbPool is the minimal interface of *pgxpool.Pool that Store uses. The
+// concrete type satisfies this automatically; the interface exists so
+// unit tests can inject a fake without a real database connection.
+type dbPool interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 // Store is the data-access layer for the billing.* schema + the cached
 // `is_premium` and `credits_balance` columns on auth.users. All writes
@@ -20,7 +31,7 @@ import (
 // they call run inside an explicit BEGIN/COMMIT so the ledger row and
 // the cached balance update can't drift.
 type Store struct {
-	pool *pgxpool.Pool
+	pool dbPool
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {

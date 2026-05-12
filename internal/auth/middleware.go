@@ -145,3 +145,10 @@ func Email(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(ctxKeyEmail).(string)
 	return v, ok
 }
+
+// WithUserID returns a copy of ctx with the given user id stamped on it.
+// Intended for unit tests that exercise handlers which call MustUserID —
+// it mirrors what RequireUser does in production without the JWT overhead.
+func WithUserID(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, ctxKeyUserID, id)
+}
