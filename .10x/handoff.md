@@ -22,7 +22,114 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
-## Current Handoff — To Architect
+## Current Handoff — To: Senior Engineer + SDE
+
+**EM decision document:** `.10x/decisions/engineering-manager/pegasus-gap-analysis.md`
+
+### OUTCOMES enum decision (resolved today)
+
+Fix the **frontend** to send `"Reject"` and `"InProgress"` to match the existing backend constants. Do NOT rename backend enum values. Do NOT write a DB migration for existing rows. In `app/community/[section]/page.tsx`, update the `OUTCOMES` constant to `["Offer", "Reject", "Ghosted", "InProgress", "Withdrew"]` and add an `OUTCOME_LABELS` display map. This is captured in TASK-14.
+
+### Start here — ordered task list
+
+Work in milestone order. Do not start M2 until M0 and M1 backend tasks are deployed.
+
+| Order | Task | What to do | Critical constraint |
+|---|---|---|---|
+| 1 | TASK-01 | `internal/billing/webhook.go` — write `current_period_end` on `subscription.activated` + `subscription.charged` | None |
+| 2 | TASK-02 | `internal/billing/handlers.go` — add 409 guard in subscription checkout | None |
+| 3 | TASK-03 | Write `migrations/0019_community_slugs.sql` | None |
+| 4 | TASK-04 | New `internal/jobtracker/slug.go` — use `crypto/rand`, 5-retry loop | After TASK-03 |
+| 5 | TASK-05 | `slug_test.go` — required, all edge cases from Staff Engineer ADR §10 | After TASK-04 |
+| 6 | TASK-06 | `store_community.go` + `handlers_community.go` — `GetPostBySlug`, dual-path lookup, `CommunityPost.Slug` scan | After TASK-04 |
+| 7 | TASK-07 | `lib/api-client.ts` — add `slug: string` to `ApiCommunityPost` | After TASK-06 deployed |
+| 8 | TASK-08 | `app/community/[section]/page.tsx` — post card href → `post.slug` | After TASK-07 |
+| 9 | TASK-09 | Write `migrations/0020_community_sort_indexes.sql` | None |
+| 10 | TASK-10 | `store_community.go` — `CommunityListOpts.Sort`, allowlist ORDER BY dispatch | After TASK-09 |
+| 11 | TASK-11 | New `internal/jobtracker/validators_community.go` — per-surface switch dispatch | None |
+| 12 | TASK-12 | `validators_community_test.go` — required | After TASK-11 |
+| 13 | TASK-13 | `handlers_community.go` — call validator in Create/Update; wire `?sort=` from `parseListOpts` | After TASK-11, TASK-10 |
+| 14 | TASK-14 | `app/community/[section]/page.tsx` — update OUTCOMES + other enums + OUTCOME_LABELS map | **Deploy at same time as or after TASK-13** |
+| 15 | TASK-15 | `app/community/[section]/page.tsx` + `lib/community.ts` — URL filter state, sort tabs | After TASK-14 |
+| 16 | TASK-16 | Author chip → `<Link href={"/u/" + post.authorSlug}>` | After TASK-07 |
+| 17 | TASK-17 | Remove `seedRecruiters`, render from `posts` | After TASK-15; only if prod has real recruiter posts |
+| 18 | TASK-18 | Experience modal — populate app-link select via `GET /applications?limit=200` | After TASK-14 |
+| 19 | TASK-19 | `app/profile/page.tsx` — `type="url"` on LinkedIn/GitHub/Website inputs | None |
+| 20 | TASK-20 | `go get github.com/go-pdf/fpdf`; new `handlers_ai_pdf.go`; 3 PDF routes in `routes.go` | After M0 deployed |
+| 21 | TASK-21 | Frontend "Download PDF" + "Download report" buttons | After TASK-20 |
+| 22 | TASK-22 | `app/globals.css` — CSS tokens + 7 stage tokens + dark mirrors; kanban `var(--stage-*)` | None |
+| 23 | TASK-23 | `components/ui.tsx` ModalShell; `pnpm add @radix-ui/react-focus-scope`; all 8 modal sites in ONE PR | After TASK-22 |
+| 24 | TASK-24 | `app/globals.css` — breakpoints (48rem), 8svh modal, hover gating, reduced-motion, touch targets | After TASK-23 |
+
+### Key patterns — read before writing code
+
+- **Handler template:** `internal/jobtracker/handlers_reminders.go`
+- **Store template:** `internal/jobtracker/store_reminders.go`
+- **All new `Api*` types:** bottom of `lib/api-client.ts`
+- **PDF streaming:** set `Content-Type` + `Content-Disposition` headers BEFORE `pdf.Output(w)`. No credit gate on PDF endpoints.
+- **Slug collision:** use `crypto/rand`, NOT `math/rand`. Loop 5 times.
+- **Sort SQL injection:** allowlist map lookup only; never interpolate `?sort=` raw value into SQL.
+- **Modal a11y:** all 8 sites in one PR; `<FocusScope trapped loop>` + `inert` on `<main>`.
+- **No UI restructuring:** memory rule — when wiring backends to existing UI, only swap data sources; do not restructure JSX.
+- **No new billing credit constants:** PDF endpoints are free (credit was paid at text-generation time).
+
+### Deployment coordination (highest risk)
+
+TASK-13 (backend validation) must go to production before or simultaneously with TASK-14 (frontend enum update). If TASK-14 ships first, it sends `"Reject"` to a backend that still accepts both values — safe. If TASK-13 ships first without TASK-14, the backend rejects `"Rejected"` (old frontend value) — breaking for active users. Coordinate explicitly. Add a comment in the TASK-14 PR checklist.
+
+---
+
+## Previous Handoff — To Staff Engineer + Engineering Manager
+
+**Architect decision document:** `.10x/decisions/architect/pegasus-gap-analysis.md`
+
+### Component list (new files + modifications)
+
+**Backend (`sypher-api/internal/jobtracker/`):**
+- `slug.go` [NEW] — `slugify()` pure function + `Store.uniqueSlug()` with collision retry
+- `handlers_community.go` [MOD] — dual-path UUID/slug lookup; `validateCommunityMetadata()` dispatch table; `?sort=` param
+- `handlers_ai.go` [MOD] — `GenerateCoverLetterPDF`, `ResumeTweakPDF`, `LatestResumeReportPDF`
+- `handlers_files.go` [MOD] — `RequestAvatarUploadURL`, `FinalizeAvatar`, `DeleteAvatar` (deferred P2)
+- `store_community.go` [MOD] — `GetPostBySlug()`; `CommunityListOpts.Sort`; `ListPosts()` ORDER BY dispatch
+- `store_files.go` [MOD] — avatar store functions; link to `auth.Store.UpdateUserPictureURL()`
+- `types.go` [MOD via store_community.go] — `CommunityPost.Slug` field added to scan + JSON
+- `routes.go` [MOD] — PDF routes; avatar routes (deferred)
+
+**Migrations:**
+- `migrations/0019_community_slugs.sql` [NEW] — slug column, backfill, unique index
+- `migrations/0020_community_sort_indexes.sql` [NEW] — vote_count + comment_count partial indexes
+- `migrations/0021_avatar_partial_unique.sql` [NEW, deferred] — `WHERE kind='avatar'` partial unique
+
+**Frontend (`job-tracker/`):**
+- `lib/api-client.ts` [MOD] — `ApiCommunityPost.slug: string`; avatar types; PDF download helper
+- `app/community/[section]/page.tsx` [MOD] — enum realignment; URL filter state; author chip links; recruiter from API
+- `components/ui.tsx` [MOD] — `ModalShell` new export; `MetricCard` monospace
+- `app/applications/page.tsx` [MOD] — kanban stage token colors; 5 modal sites → ModalShell
+- `app/settings/page.tsx` [MOD] — delete account modal → ModalShell
+- `app/resume/page.tsx` [MOD] — "Download report" button on step 4
+- `app/globals.css` [MOD] — CSS tokens; stage colors; breakpoints; hover gating; modal a11y
+- `package.json` [MOD] — add `@radix-ui/react-focus-scope`
+- `go.mod` + `go.sum` [MOD] — add `github.com/go-pdf/fpdf`
+
+### Integration points requiring coordination
+
+1. **Enum realignment + backend validation must ship together.** Phase 12 frontend OUTCOMES change (`"Rejected"` → `"Reject"`) must coincide with or precede the backend validation landing. Split deployment risks 400 errors for users on the old frontend.
+
+2. **Slug migration must precede frontend link change.** Deploy backend `0019` + `slug.go` first; then deploy frontend `post.id` → `post.slug` link change. Both UUID-style and slug-style URLs work after deploy order is respected.
+
+3. **Avatar finalize calls `auth.Store.UpdateUserPictureURL`** — new method needed on `auth.Store`, not `jobtracker.Store`. The `jobtracker.Handler` already holds `authStore` for API tokens; no new dependency wiring required.
+
+4. **ModalShell refactor is one atomic PR** — all 8 sites must change simultaneously. Partial migration creates CSS inconsistency. See `.10x/decisions/architect/pegasus-gap-analysis.md` for the full 8-site list.
+
+### Open questions for EM/Staff to resolve before implementation
+
+1. Should `POST /job-tracker/ai/resume/tweaks/{id}/pdf` debit credits? Content already exists in DB; no new AI call. Recommendation: no debit (free export).
+2. Should `OUTCOMES` backend enum values stay as `"Reject"` / `"InProgress"` or be renamed to `"Rejected"` / `"In Progress"` for UX? Affects both backend validation constants and frontend display labels simultaneously.
+3. Should `uniqueSlug` retry once on unique_violation inside `CreatePost`, or surface the error to the user? Recommendation: retry once with fresh entropy.
+
+---
+
+## Previous Handoff — To Architect (completed)
 
 **PM decision document:** `.10x/decisions/product-manager/pegasus-gap-analysis.md`
 
@@ -117,3 +224,50 @@ The CTO gap analysis confirms the PM's P0/P1 prioritisation. Two build-vs-buy de
 
 - CTO ADR: `.10x/decisions/cto/pegasus-gap-analysis.md`
 - CTO index: `.10x/decisions/cto/_index.md`
+
+---
+
+## Staff Engineer Layer (added 2026-05-12)
+
+**To:** Senior Engineer + SDE  
+**From:** Staff Engineer Agent
+
+### Pattern guide
+
+Every new handler must follow the `handlers_reminders.go` template exactly:
+- Use `readJSON`, `pathUUID`, `writeDBError` helpers from `handler.go`
+- Use `httpx.WriteJSON` / `httpx.WriteError` for all responses — never write `err.Error()` to client
+- New store functions follow `store_reminders.go`: `const q = ...` inside each function, tenant filter on every query, `if out == nil { out = []T{} }` before returning a list
+- New standalone validators go in `validate.go` (field-level) or the new `validators_community.go` (structural/per-surface)
+
+### Key patterns resolved in this cycle
+
+| Decision | Outcome | Reference |
+|---|---|---|
+| Community metadata validator placement | New file `validators_community.go`, switch dispatch, `*metaValidationError` return type | ADR §4 |
+| PDF handler file | New file `handlers_ai_pdf.go` — separate from AI text handlers | ADR §6b |
+| PDF streaming | Set headers first, then `pdf.Output(w)` directly — no buffering | ADR §6c |
+| PDF credit gating | No credit gate on PDF endpoints — credit was spent at text-generation time | ADR §6e |
+| Slug collision retry | Loop 5 times with `crypto/rand` suffix, not a single retry | ADR §5a |
+| Unicode slug handling | Non-ASCII silently dropped → falls back to `post-{hex}` slug | ADR §5c |
+| Focus trap | `<FocusScope trapped loop>` from `@radix-ui/react-focus-scope`, apply to all 8 modal sites in one PR | ADR §8 |
+| Sort parameter injection | Use allowlist map — never interpolate `?sort=` raw value into SQL | ADR §12 |
+
+### Example file references
+
+- Handler template: `internal/jobtracker/handlers_reminders.go`
+- Store template: `internal/jobtracker/store_reminders.go`
+- Validator location: `internal/jobtracker/validate.go`
+- Cost constants: `internal/billing/costs.go` (do NOT add PDF cost constants here)
+- Frontend page template: `app/recruiters/page.tsx`
+- All frontend types: `lib/api-client.ts` (add new `Api*` types at the bottom)
+- CSS tokens: `app/globals.css` lines 18–52 (`:root` block)
+
+### Test files to create
+
+- `internal/jobtracker/slug_test.go` — required, covers `slugify()` edge cases including Unicode drop
+- `internal/jobtracker/validators_community_test.go` — required, covers all 4 surfaces × valid/invalid enum values
+
+### Staff Engineer ADR
+
+`.10x/decisions/staff-engineer/pegasus-gap-analysis.md`

@@ -1,8 +1,8 @@
 # Project Status
 
-**Project:** sypher-api / Pegasus (job-tracking SaaS)  
-**Phase:** CTO ADR complete — ready for PM + Architect  
-**Date:** 2026-05-12  
+**Project:** sypher-api / Pegasus (job-tracking SaaS)
+**Phase:** Planning: EM complete — ready for Senior Engineer + SDE
+**Date:** 2026-05-12
 **Active slug:** `pegasus-gap-analysis`
 
 ## What exists (discovered)
@@ -30,17 +30,73 @@
 | 13 | Notes category rename + rate limiting | Done |
 | 16 | Cursor pagination on applications | Done |
 
-## Remaining phases
+## Remaining phases — Full task list
 
-| Phase | Feature | Priority | Recommended order |
-|---|---|---|---|
-| community-slugs | Human-readable slugs on community post URLs | P1 | 0th — ships with Phase 12 |
-| 12 backend | Community sort indexes + per-surface metadata validation | Medium | 1st |
-| 12 frontend | Enum realignment, filter URL state, sort tabs | Medium | 2nd |
-| 10 | AI PDFs (go-pdf/fpdf) + Avatar upload (files table kind='avatar') | High | 3rd |
-| 14 CSS | Design tokens, kanban tints | Medium | 4th |
-| 14 a11y | ModalShell, focus trap (@radix-ui/react-focus-scope), inert | Medium | 5th |
-| 15 | Mobile breakpoints, iOS Safari modal, hover gating, touch targets | Low | 6th |
+### Milestone 0 — Bug Fixes (unblock first)
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-01 | Fix `currentPeriodEnd` null for active subscriptions (B2) | S | SDE backend | Pending |
+| TASK-02 | Add 409 guard to prevent Pro re-subscription (B3) | S | SDE backend | Pending |
+
+### Milestone 1 — Community Post Slugs
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-03 | Migration `0019_community_slugs.sql` | S | SDE backend | Pending |
+| TASK-04 | `slug.go` — `slugify()` + `Store.uniqueSlug()` with collision retry | S | SDE backend | Pending |
+| TASK-05 | `slug_test.go` (required) | S | SDE backend | Pending |
+| TASK-06 | Wire slugs into store + handlers (dual-path lookup) | M | SDE backend | Pending |
+| TASK-07 | Add `slug: string` to `ApiCommunityPost` type | S | SDE frontend | Pending |
+| TASK-08 | Community post card links use `post.slug` | S | SDE frontend | Pending |
+
+### Milestone 2 — Phase 12 Backend
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-09 | Migration `0020_community_sort_indexes.sql` | S | SDE backend | Pending |
+| TASK-10 | `ListPosts()` sort param with allowlist SQL guard | S | SDE backend | Pending |
+| TASK-11 | `validators_community.go` — per-surface metadata validation | M | SDE backend | Pending |
+| TASK-12 | `validators_community_test.go` (required) | S | SDE backend | Pending |
+| TASK-13 | Wire validation + sort into `handlers_community.go` | M | SDE backend | Pending |
+
+### Milestone 3 — Phase 12 Frontend
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-14 | Realign enum constants (OUTCOMES, TARGET_ROLES, EXPERIENCE_LEVELS, ROUND_TYPES) — deploy after TASK-13 | S | SDE frontend | Pending |
+| TASK-15 | Wire filter/sort buttons to URL query state | M | SDE frontend | Pending |
+| TASK-16 | Author chip links to `/u/{authorSlug}` | S | SDE frontend | Pending |
+| TASK-17 | Fix community recruiter list from API, remove seed data (B5) | S | SDE frontend | Pending |
+| TASK-18 | Populate "Link to tracked application" select in experience modal | S | SDE frontend | Pending |
+| TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Pending |
+
+### Milestone 4 — Phase 10: AI PDFs
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-20 | `go-pdf/fpdf` + `handlers_ai_pdf.go` — 3 PDF endpoints | L | SDE backend | Pending |
+| TASK-21 | Frontend "Download PDF" / "Download report" buttons | M | SDE frontend | Pending |
+
+### Milestone 5 — Phase 14: Design System
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-22 | CSS design tokens + stage color tokens + MetricCard mono | S | SDE frontend | Pending |
+| TASK-23 | ModalShell + FocusScope — all 8 modal sites in one PR | XL | SDE frontend | Pending |
+
+### Milestone 6 — Phase 15: Mobile CSS
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-24 | Breakpoint fix + iOS modal padding + hover gating + reduced-motion + touch targets | L | SDE frontend | Pending |
+
+### Parallel Track — Test Coverage
+
+| Task | Title | Size | Owner | Status |
+|---|---|---|---|---|
+| TASK-25 | Billing regression tests (B2/B3) | M | SDE backend | Pending |
+| TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Pending |
 
 ## Slug feature spec
 
@@ -59,13 +115,13 @@
 - Highest risk item: Phase 14 ModalShell refactor (8 modal sites, do in one PR)
 - Critical tech debt: internal/jobtracker has only 1 test file (mentions_test.go); no handler/store tests
 
-## Open questions (need answers before Phase 2 / Architect dispatch)
+## Open questions — RESOLVED
 
-| Q# | Question | Options |
+| Q# | Question | Decision |
 |---|---|---|
-| Q1 | GitHub + Discord links in Settings — old Naukri Clear branding, never ported | (a) link to Pegasus-branded repos/Discord (b) leave out of v1.0 |
-| Q2 | Community `OUTCOMES` enum drift — old posts may have "Rejected"/"In Progress" vs correct "Reject"/"InProgress" | (a) coerce on read (b) hard-reject new writes only (c) DB migration to normalize first |
-| Q3 | Avatar upload — block v1.0 launch or ship as initials-fallback and add post-launch? | (a) block v1.0 (b) post-launch |
+| Q1 | Naukri Clear GitHub/Discord links — never ported | Resolved: nothing pointing to Naukri stays in Pegasus. Removed "Naukri" from UI copy in `settings/page.tsx` and `applications/page.tsx`. `NAUKRI` source enum kept (functional job board value with backend importer). No Naukri Clear competitor links to add. |
+| Q2 | Community `OUTCOMES` enum drift | Resolved: hard-reject new writes only (400 bad_input on POST/PATCH). Existing DB rows untouched. |
+| Q3 | Avatar upload blocks v1.0? | Resolved: P2, ships post-launch. Initials-fallback acceptable at v1.0. |
 
 ## CI fix (pending push)
 
