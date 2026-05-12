@@ -125,6 +125,12 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("PATCH", "/job-tracker/ai/resume/tweaks/{id}", h.PatchResumeTweak)
 	g("DELETE", "/job-tracker/ai/resume/tweaks/{id}", h.DeleteResumeTweak)
 
+	// PDF export — free (no credit debit); credits were spent at text-generation time.
+	// Inherits the requireUser middleware applied by g().
+	g("POST", "/job-tracker/ai/cover-letter/pdf", h.CoverLetterPDF)
+	g("GET", "/job-tracker/ai/resume/tweaks/{id}/pdf", h.ResumeTweakPDF)
+	g("GET", "/job-tracker/ai/resume/report/latest/pdf", h.LatestResumeReportPDF)
+
 	// Personal Recruiters — private CRM, distinct from /community/recruiters.
 	g("GET", "/job-tracker/recruiters", h.ListRecruiters)
 	g("POST", "/job-tracker/recruiters", h.CreateRecruiter)
