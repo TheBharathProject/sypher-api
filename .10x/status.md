@@ -69,7 +69,7 @@
 | TASK-16 | Author chip links to `/u/{authorSlug}` | S | SDE frontend | Pending |
 | TASK-17 | Fix community recruiter list from API, remove seed data (B5) | S | SDE frontend | Pending |
 | TASK-18 | Populate "Link to tracked application" select in experience modal | S | SDE frontend | Pending |
-| TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Pre-implemented — verify and document only |
+| TASK-19 | Fix profile URL input fields `type="url"` (B4) | S | SDE frontend | Done — already `type="url"` on all three fields (lines 668, 677, 686); `pnpm tsc --noEmit` passes zero errors |
 
 ### Milestone 4 — Phase 10: AI PDFs
 
