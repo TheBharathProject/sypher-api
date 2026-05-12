@@ -36,8 +36,8 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-01 | Fix `currentPeriodEnd` null for active subscriptions (B2) | S | SDE backend | Pending |
-| TASK-02 | Add 409 guard to prevent Pro re-subscription (B3) | S | SDE backend | Pre-implemented — write regression test only |
+| TASK-01 | Fix `currentPeriodEnd` null for active subscriptions (B2) | S | SDE backend | Done — already implemented; regression tests added (f0ca0f9) |
+| TASK-02 | Add 409 guard to prevent Pro re-subscription (B3) | S | SDE backend | Done — already implemented; regression tests added (f0ca0f9) |
 
 ### Milestone 1 — Community Post Slugs
 
@@ -95,7 +95,7 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-25 | Billing regression tests (B2/B3) | M | SDE backend | Pending |
+| TASK-25 | Billing regression tests (B2/B3) | M | SDE backend | Done — 13 tests passing, -race green (f0ca0f9) |
 | TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Pending |
 
 ## Slug feature spec

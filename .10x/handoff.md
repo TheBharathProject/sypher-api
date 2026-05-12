@@ -22,6 +22,28 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA + Security (post SDE)
+
+### What was built (TASK-01, TASK-02, TASK-25) — commit f0ca0f9
+
+**Behavioral changes: none.** Both TASK-01 (currentPeriodEnd write) and TASK-02 (409 guard) were already implemented in production code. This session added regression tests only plus two infrastructure changes to enable testing:
+
+1. `internal/auth/middleware.go` — new exported `WithUserID(ctx, id) context.Context` helper. Only used in tests. Does NOT change auth middleware behavior.
+2. `internal/billing/store.go` — `Store.pool` field type changed from `*pgxpool.Pool` to a new `dbPool` interface. `*pgxpool.Pool` satisfies the interface automatically. `NewStore` signature unchanged. Runtime behavior identical.
+3. `internal/billing/handlers_test.go` — 9 new tests, all in-process (no DB, no network).
+
+**What QA should test:**
+- `POST /billing/checkout/subscription` with an active subscription returns 409 `{"error":"already_subscribed"}`
+- `POST /billing/checkout/subscription-plus` same
+- A user whose subscription has `cancel_at_period_end=true` can reach the checkout form (no 409)
+- After a `subscription.charged` or `subscription.activated` webhook, `GET /billing/me` returns a non-null `currentPeriodEnd`
+
+**What Security should review:**
+- `auth.WithUserID` is purely a test helper — it bypasses JWT verification. Confirm it is not reachable from any production HTTP path (it sets the same context key that RequireUser sets, so a request must still pass through RequireUser in the actual server; there is no HTTP route that calls WithUserID).
+- `dbPool` interface exposure: internal only, no external API surface change.
+
+---
+
 ## Current Handoff — To: SDE
 
 **Senior Engineer decision document:** `.10x/decisions/senior-engineer/pegasus-gap-analysis.md`
