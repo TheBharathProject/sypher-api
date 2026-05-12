@@ -54,11 +54,11 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-09 | Migration `0020_community_sort_indexes.sql` | S | SDE backend | Pending |
-| TASK-10 | `ListPosts()` sort param with allowlist SQL guard | S | SDE backend | Pending |
-| TASK-11 | `validators_community.go` — per-surface metadata validation | M | SDE backend | Pending |
-| TASK-12 | `validators_community_test.go` (required) | S | SDE backend | Pending |
-| TASK-13 | Wire validation + sort into `handlers_community.go` | M | SDE backend | Pending |
+| TASK-09 | Migration `0020_community_sort_indexes.sql` | S | SDE backend | Done (3459e79) |
+| TASK-10 | `ListPosts()` sort param with allowlist SQL guard | S | SDE backend | Done (3459e79) |
+| TASK-11 | `validators_community.go` — per-surface metadata validation | M | SDE backend | Done (3459e79) |
+| TASK-12 | `validators_community_test.go` (required) | S | SDE backend | Done (3459e79) — 38 tests passing |
+| TASK-13 | Wire validation + sort into `handlers_community.go` | M | SDE backend | Done (3459e79) |
 
 ### Milestone 3 — Phase 12 Frontend
 
@@ -96,7 +96,7 @@
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
 | TASK-25 | Billing regression tests (B2/B3) | M | SDE backend | Done — 13 tests passing, -race green (f0ca0f9) |
-| TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Partial — TASK-05 (slug tests) done (abed2a3); TASK-12 (validator tests) pending |
+| TASK-26 | Slug + community validator tests (required, see TASK-05/TASK-12) | S | SDE backend | Done — TASK-05 (slug tests) done (abed2a3); TASK-12 (validator tests) done (3459e79) |
 
 ## Slug feature spec
 

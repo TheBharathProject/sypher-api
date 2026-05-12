@@ -1,8 +1,8 @@
 # SDE Decision — pegasus-gap-analysis
 
 **Date:** 2026-05-12
-**Commit:** f0ca0f9
-**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-25
+**Commit:** f0ca0f9 (prior), 3459e79 (TASK-09 through TASK-13)
+**Tasks:** TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-09, TASK-10, TASK-11, TASK-12, TASK-13, TASK-25
 
 ---
 
@@ -221,3 +221,100 @@ go build ./...
 | `f0ca0f9` | fix(billing): write current_period_end on webhook + 409 guard on re-subscription |
 | `abed2a3` | feat(jobtracker): community post slugs — migration, slug.go, dual-path lookup |
 | `7c5e01f` | feat(community): use slug in post links, add slug type to ApiCommunityPost |
+| `3459e79` | feat(community): sort indexes migration, per-surface metadata validation, ?sort= param |
+
+---
+
+### TASK-09 — migrations/0020_community_sort_indexes.sql [NEW]
+
+**New file:** `migrations/0020_community_sort_indexes.sql`
+
+Confirmed 0019 was the latest migration before this session. New file adds two partial indexes:
+- `community_posts_vote_count_idx` on `(surface, vote_count DESC, created_at DESC) WHERE status = 'active'`
+- `community_posts_comment_count_idx` on `(surface, comment_count DESC, created_at DESC) WHERE status = 'active'`
+
+Both wrapped in a transaction. `IF NOT EXISTS` guards make it idempotent. Column names confirmed from `0010_community.sql` (`vote_count`, `comment_count`, `status` all exist with those exact names).
+
+**Deviation from Senior Engineer ADR:** The task description specified index names `community_posts_vote_count_idx` and `community_posts_comment_count_idx`. The Senior Engineer ADR used `idx_community_posts_surface_votes` and `idx_community_posts_surface_comments`. Used the task description names as the immediate instruction.
+
+---
+
+### TASK-10 — Sort support in ListPosts (store_community.go)
+
+**Modified:** `internal/jobtracker/store_community.go`
+
+Changes:
+1. Added `Sort string` to `CommunityListOpts` struct with doc comment listing valid values
+2. Added `CommunityUpdateInput` struct (optional `Surface` + PATCH fields) alongside this change since both structs live here
+3. In `ListPosts`: replaced hard-coded `ORDER BY p.created_at DESC` with local `allowedSort` map dispatch. Map contains three entries: `newest`, `votes`, `most-reviewed`. Unknown/empty sort falls back to `newest`. The safe string from the map (never user input) is interpolated into the query.
+4. Added v1 trade-off comment: cursor pagination still uses `created_at` regardless of sort mode.
+
+**Deviation from Senior Engineer ADR:** The Senior Engineer ADR suggested making `allowedSortClauses` a package-level var. The task description said to keep it local inside `ListPosts`. Used task description as the immediate instruction. Local map is also preferable — no state shared outside the function.
+
+The Senior Engineer ADR also listed a 4th sort value `"least-reviewed"`. The task description lists only 3 (`newest`, `votes`, `most-reviewed`). Used the task description's 3-value list.
+
+---
+
+### TASK-11 — validators_community.go [NEW]
+
+**New file:** `internal/jobtracker/validators_community.go`
+
+`metaValidationError` struct with exported `Field` and `Message` fields (not unexported as originally suggested — exported fields allow the handler to read them directly without accessors and are cleaner given the handler is in the same package). `Error()` returns `"field: message"`.
+
+`validateCommunityMetadata(surface, raw)` — switch dispatch to per-surface validators:
+- `experiences`: validates `outcome` ∈ {Offer, Reject, Ghosted, InProgress, Withdrew} and `difficulty` ∈ {Easy, Medium, Hard} — only when fields are present and non-empty
+- `ask`: validates `tags` array: len ≤ 3, each from allowlist of 10 values
+- `recruiters`: validates `specializations` from 6-value list; `hiringLevels` from 8-value list
+- `reviews`: validates `targetRole` from 7-value list; `experienceLevel` from 5-value list
+- `referrals`: returns nil
+- default: returns nil
+- nil/empty raw: returns nil
+
+**Deviation from Senior Engineer ADR on allowlists:** The task description specified different allowlist values for ask tags (10 values including Career/Interview/Compensation/Remote/Visa/Internship/Fresher/Layoffs/Tools/Other), recruiter specializations (6: Tech/Non-Tech/Executive/Campus/Contract/Other), and hiring levels (8: Fresher/Junior/Mid/Senior/Lead/Manager/Director/Executive) versus the Senior Engineer ADR which read values from frontend constants. Used the task description values as the canonical specification.
+
+**Deviation on field export:** Senior Engineer ADR showed unexported `field string` and `msg string`. Using exported `Field string` and `Message string` since they are accessed by the handler in the same package and exported fields are Go idiomatic for structs.
+
+---
+
+### TASK-12 — validators_community_test.go [NEW]
+
+**New file:** `internal/jobtracker/validators_community_test.go`
+
+38 test cases in `TestValidateCommunityMetadata`:
+- nil/empty metadata: passes for any surface (2 cases)
+- experiences outcome: 5 valid values pass, 2 old values fail (`Rejected`, `In Progress`), absent passes, empty string passes
+- experiences difficulty: valid passes, invalid fails
+- ask tags: 3 valid pass, 0 tags pass, 4 tags fail, invalid tag fails, varied allowlist tags pass
+- recruiters specializations: valid pass (Tech, Campus+Contract), invalid fails (Backend), empty passes
+- recruiters hiringLevels: valid pass (Senior), invalid fails (Entry Level)
+- reviews targetRole: SDE and PM pass, Consultant fails, absent passes
+- reviews experienceLevel: Fresher and Mid (2-5) pass, "Senior Engineer" fails
+- referrals: any metadata passes, nil passes
+- unknown surface: passes
+
+All 38 cases pass with `-race`.
+
+---
+
+### TASK-13 — Wire validation + sort into handlers_community.go
+
+**Modified:** `internal/jobtracker/handlers_community.go`
+
+Three changes:
+
+1. **`CreateCommunityPost`:** Added `validateCommunityMetadata(surface, in.Metadata)` call after the `len(in.Body) > 16384` check and before `in.Surface = surface`. Returns three-key JSON response `{"error":"invalid_metadata","field":"...","message":"..."}` via `httpx.WriteJSON` on failure (not `httpx.WriteError` — the three-key shape is required per the PM acceptance criteria).
+
+2. **`UpdateCommunityPost`:** Changed from `CommunityPostInput` to `CommunityUpdateInput` (new struct with `Surface string \`json:"surface,omitempty"\``) for the PATCH body. Validates metadata only when BOTH `upd.Surface != ""` AND `len(upd.Metadata) > 2` — skips validation on title-only edits to avoid breaking PATCH requests that don't include a surface. Adapts back to `CommunityPostInput` for the `UpdatePost` store call.
+
+3. **`parseListOpts`:** Added `opts.Sort = r.URL.Query().Get("sort")` before the return statement. The raw query param value passes through to the store; the store's allowlist sanitises it.
+
+**Surprise in existing handler structure:** `UpdateCommunityPost` already used `CommunityPostInput` which has `Surface string \`json:"-"\``. The `-` json tag meant surface was always ignored from PATCH bodies. The `CommunityUpdateInput` struct is the minimal change — it doesn't touch `CommunityPostInput` used by `CreatePost`.
+
+---
+
+## Tech debt created (new, from TASK-09 through TASK-13)
+
+| Item | Severity | Notes |
+|---|---|---|
+| Cursor pagination ignores sort mode | Low | `writeListResponse` always uses `CreatedAt` for the next cursor regardless of sort. Sort tabs should reset to page 1 on sort change (frontend responsibility). Documented in code comment. |
+| `validateCommunityMetadata` uses `map[string]any` for experiences/reviews | Low | `json.Unmarshal` into `map[string]any` for experiences and reviews surfaces (instead of a typed struct) to avoid defining 4 per-surface structs. The type assertion `meta["outcome"].(string)` is safe because the zero value for a missing key is nil which fails the type assertion and passes validation. No runtime panic risk. |

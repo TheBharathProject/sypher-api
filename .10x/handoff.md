@@ -22,6 +22,47 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA + Security (post SDE, TASK-09 through TASK-13)
+
+### What was built (TASK-09, TASK-10, TASK-11, TASK-12, TASK-13) — commit 3459e79
+
+1. **`migrations/0020_community_sort_indexes.sql`** — two partial indexes on `community_posts`:
+   - `community_posts_vote_count_idx` on `(surface, vote_count DESC, created_at DESC) WHERE status = 'active'`
+   - `community_posts_comment_count_idx` on `(surface, comment_count DESC, created_at DESC) WHERE status = 'active'`
+   Transaction-wrapped, `IF NOT EXISTS` idempotency guards.
+
+2. **`internal/jobtracker/store_community.go`** — `CommunityListOpts` gains `Sort string` field; `ListPosts` dispatches `ORDER BY` via a local allowlist map (`newest`/`votes`/`most-reviewed`); added `CommunityUpdateInput` struct with optional `Surface` field for PATCH bodies.
+
+3. **`internal/jobtracker/validators_community.go`** — new file. `validateCommunityMetadata(surface, raw)` validates per-surface metadata JSON. Switch dispatch to per-surface validators; returns `*metaValidationError{Field, Message}` on first violation. nil/empty raw always passes.
+
+4. **`internal/jobtracker/validators_community_test.go`** — 38-case test matrix. All pass with `-race`.
+
+5. **`internal/jobtracker/handlers_community.go`** — three wiring changes:
+   - `CreateCommunityPost`: calls `validateCommunityMetadata` after body-length check, before DB call. Returns `{"error":"invalid_metadata","field":"...","message":"..."}` on failure.
+   - `UpdateCommunityPost`: uses `CommunityUpdateInput` (with optional `Surface`); validates metadata only when both surface and non-trivial metadata are present in the PATCH body.
+   - `parseListOpts`: reads `?sort=` query param and passes it to `CommunityListOpts.Sort`.
+
+**What QA should test:**
+- `GET /job-tracker/community/{surface}?sort=votes` — posts returned ordered by vote_count DESC
+- `GET /job-tracker/community/{surface}?sort=most-reviewed` — posts ordered by comment_count DESC
+- `GET /job-tracker/community/{surface}?sort=newest` — posts ordered by created_at DESC (same as before)
+- `GET /job-tracker/community/{surface}?sort=invalid-value` — falls back to newest sort (no error)
+- `POST /job-tracker/community/experiences` with `{"metadata":{"outcome":"Rejected"}}` — returns 400 `invalid_metadata` with `field="outcome"`
+- `POST /job-tracker/community/experiences` with `{"metadata":{"outcome":"Reject"}}` — succeeds (201)
+- `POST /job-tracker/community/ask` with `{"metadata":{"tags":["Career","Interview","Compensation","Remote"]}}` — returns 400 (4 tags exceed limit)
+- `POST /job-tracker/community/ask` with `{"metadata":{"tags":["Career","Interview","Compensation"]}}` — succeeds
+- `POST /job-tracker/community/referrals` with any metadata — always succeeds
+- `PATCH /job-tracker/community/posts/{id}` with `{"title":"new title"}` (no surface, no metadata) — succeeds without triggering validation
+- `PATCH /job-tracker/community/posts/{id}` with `{"surface":"experiences","metadata":{"outcome":"Rejected"},"title":"t"}` — returns 400 `invalid_metadata`
+- `PATCH /job-tracker/community/posts/{id}` with `{"surface":"experiences","metadata":{"outcome":"Reject"},"title":"t"}` — succeeds
+
+**What Security should review:**
+- `ListPosts` sort dispatch: the raw `?sort=` query parameter value is looked up in a hard-coded Go map. The map-returned string (e.g. `"p.vote_count DESC, p.created_at DESC"`) is what gets interpolated into the SQL query. The raw user value never touches the query. Confirm the allowlist map covers all reachable code paths.
+- `validators_community.go`: pure function, no DB, no I/O. No injection surface.
+- `validateCommunityMetadata` returns nil for unknown surfaces and nil/empty metadata — confirm this is the intended behavior (no blocking of unknown surfaces).
+
+---
+
 ## Current Handoff — To: QA + Security (post SDE)
 
 ### What was built (TASK-07, TASK-08) — commit 7c5e01f

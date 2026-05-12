@@ -2,4 +2,4 @@
 
 | Feature slug | Date | Tasks covered | Status |
 |---|---|---|---|
-| pegasus-gap-analysis | 2026-05-12 | TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-06, TASK-07, TASK-08, TASK-25 | In progress |
+| pegasus-gap-analysis | 2026-05-12 | TASK-01 through TASK-13, TASK-25 | In progress (M0+M1+M2 backend complete) |
