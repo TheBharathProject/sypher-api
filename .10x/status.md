@@ -1,7 +1,7 @@
 # Project Status
 
 **Project:** sypher-api / Pegasus (job-tracking SaaS)
-**Phase:** Planning Complete — ready for implementation
+**Phase:** Implementation Complete — ready for QA
 **Date:** 2026-05-12
 **Active slug:** `pegasus-gap-analysis`
 
@@ -89,7 +89,7 @@
 
 | Task | Title | Size | Owner | Status |
 |---|---|---|---|---|
-| TASK-24 | Breakpoint fix + iOS modal padding + hover gating + reduced-motion + touch targets | L | SDE frontend | Pending |
+| TASK-24 | Breakpoint fix + iOS modal padding + hover gating + reduced-motion + touch targets | L | SDE frontend | Done (0c47645) |
 
 ### Parallel Track — Test Coverage
 

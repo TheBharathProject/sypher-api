@@ -22,6 +22,42 @@ Pegasus is a job-tracking SaaS (`sypher.in/pegasus`) built inside the Sypher mul
 - Rate limiting: token-bucket per user ID via `golang.org/x/time/rate`
 - Frontend transport: native fetch via `lib/api-client.ts` (no React Query)
 
+## Current Handoff — To: QA + Security (post SDE, TASK-24) — commit 0c47645
+
+### What was built (TASK-24) — Mobile CSS
+
+**File changed:** `job-tracker/app/globals.css`
+**Script added:** `job-tracker/scripts/hover-gate.mjs` (one-shot transformation script, committed for audit trail)
+
+**Changes:**
+
+1. **`.modal-content` class** — `ModalShell` (from TASK-23) uses `className="modal-content"`. The CSS previously had no `.modal-content` styles. Fixed by combining `.modal-card, .modal-content` in the box-model rule, `.modal-card h2, .modal-content h2` in the heading rule, and the responsive override inside `@media (max-width: 767px)`.
+
+2. **Breakpoint fix** — All 9 occurrences of `@media (max-width: 720px)` replaced with `@media (max-width: 767px)`. Layout values `width: min(100%, 720px)` and `max-width: 720px` were NOT changed.
+
+3. **iOS Safari modal fix** — `.modal-backdrop` now uses `place-items: start center` + `padding-top: 8svh`. This prevents the modal from appearing behind iOS Safari's address bar on first open.
+
+4. **Hover gating** — All 106 `:hover` rules are now inside `@media (hover: hover) { ... }` blocks. Touch devices will not show stuck hover states. Count verified unchanged: 106 `:hover` lines before = 106 after; 103 `@media (hover: hover)` blocks added.
+
+5. **Reduced-motion** — `transition: grid-template-columns 220ms cubic-bezier(...)` on `.product-frame` (sidebar collapse) and `transition: 140ms ease` on all button variants are now wrapped in `@media (prefers-reduced-motion: no-preference)`. Users with `prefers-reduced-motion: reduce` get no animation.
+
+6. **Touch targets** — `.icon-button` now has `position: relative` and a `::before` pseudo-element with `inset: -10px`, expanding the tap target to 52px without changing visual layout.
+
+**What QA should test:**
+- Open any modal — confirm it renders correctly with a background, border-radius, padding (the `.modal-content` fix)
+- On an iOS device (or Safari DevTools): open a modal — it should be visible below the address bar, not hidden behind it
+- On a touch device: hover over buttons/links — no stuck blue/highlight state after tap-release
+- On a desktop browser: hover effects still work normally (hover: hover condition true on pointer devices)
+- Reduce animation preference: in macOS/iOS accessibility settings, enable "Reduce Motion" — sidebar collapse and button transitions should be instant (no 220ms animation)
+- `.icon-button` tap targets: on mobile, small icon buttons (bell, close, pencil) should be tappable at larger than 32px hit area
+- Breakpoint: at viewport width 720px, layout should behave as "desktop" (breakpoint now fires at 767px, not 720px)
+
+**What Security should review:**
+- Pure CSS changes. No new API calls, no data paths, no user input processing. No security implications.
+- The hover-gate script (`scripts/hover-gate.mjs`) is a build tool only; it has no runtime presence. It reads/writes a local file only.
+
+---
+
 ## Current Handoff — To: QA (post SDE, TASK-23) — commit fa8fa1e
 
 ### What was built (TASK-23)
