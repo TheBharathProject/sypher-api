@@ -81,3 +81,39 @@ Full Given/When/Then acceptance criteria for each P0/P1 item are in:
 - Confirmed bug catalogue from reading live frontend files
 - v1.0 definition of done
 - P0/P1/P2/P3 prioritisation ladder
+
+---
+
+## CTO Layer (added 2026-05-12)
+
+**To:** PM and Architect  
+**From:** CTO Agent
+
+### Business context
+
+The CTO gap analysis confirms the PM's P0/P1 prioritisation. Two build-vs-buy decisions are resolved:
+
+1. **PDF generation:** Use `github.com/go-pdf/fpdf` (maintained Go fork of gofpdf). Pure Go, zero Docker image increase, sufficient for text-first cover letter and resume tweak output. Headless Chromium is rejected — 400MB image overhead, 2–3s cold-start latency, not justified for plaintext PDFs on a single-container OCI deployment. Decision is reversible; the endpoint contract is stable even if the library is swapped later.
+
+2. **Focus trap:** Use `@radix-ui/react-focus-scope`. The frontend currently has zero runtime dependencies beyond Next.js. This would be the first. Accepted because a correct, maintained focus trap is non-trivial to write (~50 lines but with real browser edge-case maintenance burden). `@radix-ui/react-focus-scope` is a standalone 2kB package — not the full Radix ecosystem.
+
+### Constraints
+
+- Next migration number: `0019_` (Phase 12 community sort indexes). Phase 10 avatar partial unique index will be `0020_`.
+- `internal/jobtracker` has only one test file (`mentions_test.go`). All 60+ handler/store functions are untested. New code in billing, auth, or AI credit paths requires unit tests before merge.
+- Single-pod cron assumption is still in place. `stale-apps` and `daily-digest` are not multi-instance safe. Do not run a second container until this is resolved.
+- No Tailwind, no OpenAPI spec, no new infra.
+
+### Recommended sequencing
+
+1. Phase 12 backend (sort migration + per-surface validation) — additive, zero regression risk
+2. Phase 12 frontend (enum realignment, URL-synced filters, sort tabs)
+3. Phase 10 (go-pdf/fpdf PDF endpoints + avatar routes + migration)
+4. Phase 14 CSS tokens + kanban tints — additive
+5. Phase 14 ModalShell + focus trap — highest-risk item, do in one PR across all 8 modal sites
+6. Phase 15 mobile — broad CSS surgery, visual regression check required
+
+### References
+
+- CTO ADR: `.10x/decisions/cto/pegasus-gap-analysis.md`
+- CTO index: `.10x/decisions/cto/_index.md`
