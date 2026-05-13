@@ -23,6 +23,10 @@ func (s *Store) CreateReminder(ctx context.Context, userID, appID uuid.UUID, in 
 	return scanReminder(row)
 }
 
+// ListReminders joins job_tracker.applications so each row carries company +
+// role for the Activity panel's reminders tab. Single-row endpoints (Get,
+// Create, Patch) deliberately do NOT join — they don't need the context and
+// their callers already know which application they're scoped to.
 func (s *Store) ListReminders(ctx context.Context, userID uuid.UUID, appID *uuid.UUID) ([]Reminder, error) {
 	var (
 		rows pgx.Rows
@@ -30,18 +34,22 @@ func (s *Store) ListReminders(ctx context.Context, userID uuid.UUID, appID *uuid
 	)
 	if appID != nil {
 		const q = `
-			SELECT id, application_id, triggers_at, note, fired_at, created_at, updated_at
-			FROM job_tracker.reminders
-			WHERE user_id = $1 AND application_id = $2
-			ORDER BY triggers_at ASC
+			SELECT r.id, r.application_id, a.company, a.role,
+			       r.triggers_at, r.note, r.fired_at, r.created_at, r.updated_at
+			FROM job_tracker.reminders r
+			LEFT JOIN job_tracker.applications a ON a.id = r.application_id
+			WHERE r.user_id = $1 AND r.application_id = $2
+			ORDER BY r.triggers_at ASC
 		`
 		rows, err = s.pool.Query(ctx, q, userID, *appID)
 	} else {
 		const q = `
-			SELECT id, application_id, triggers_at, note, fired_at, created_at, updated_at
-			FROM job_tracker.reminders
-			WHERE user_id = $1
-			ORDER BY triggers_at ASC
+			SELECT r.id, r.application_id, a.company, a.role,
+			       r.triggers_at, r.note, r.fired_at, r.created_at, r.updated_at
+			FROM job_tracker.reminders r
+			LEFT JOIN job_tracker.applications a ON a.id = r.application_id
+			WHERE r.user_id = $1
+			ORDER BY r.triggers_at ASC
 		`
 		rows, err = s.pool.Query(ctx, q, userID)
 	}
@@ -52,7 +60,7 @@ func (s *Store) ListReminders(ctx context.Context, userID uuid.UUID, appID *uuid
 
 	var out []Reminder
 	for rows.Next() {
-		r, e := scanReminderCols(rows.Scan)
+		r, e := scanReminderListCols(rows.Scan)
 		if e != nil {
 			return nil, e
 		}
@@ -155,6 +163,39 @@ func scanReminderCols(scan func(...any) error) (*Reminder, error) {
 	r := &Reminder{
 		ID:            id.String(),
 		ApplicationID: appID.String(),
+		TriggersAt:    triggersAt.UTC().Format(time.RFC3339),
+		Note:          note,
+		CreatedAt:     creAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     updAt.UTC().Format(time.RFC3339),
+	}
+	if firedAt != nil {
+		s := firedAt.UTC().Format(time.RFC3339)
+		r.FiredAt = &s
+	}
+	return r, nil
+}
+
+// scanReminderListCols scans the 9-column SELECT used by ListReminders
+// (joined with applications for company/role). Kept separate from the 7-col
+// scanReminderCols so single-row endpoints don't pay for the join.
+// Column order: id, application_id, company, role, triggers_at, note,
+// fired_at, created_at, updated_at.
+func scanReminderListCols(scan func(...any) error) (*Reminder, error) {
+	var (
+		id, appID                uuid.UUID
+		company, role            *string
+		triggersAt, creAt, updAt time.Time
+		firedAt                  *time.Time
+		note                     *string
+	)
+	if err := scan(&id, &appID, &company, &role, &triggersAt, &note, &firedAt, &creAt, &updAt); err != nil {
+		return nil, err
+	}
+	r := &Reminder{
+		ID:            id.String(),
+		ApplicationID: appID.String(),
+		Company:       company,
+		Role:          role,
 		TriggersAt:    triggersAt.UTC().Format(time.RFC3339),
 		Note:          note,
 		CreatedAt:     creAt.UTC().Format(time.RFC3339),

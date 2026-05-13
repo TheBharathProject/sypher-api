@@ -113,6 +113,10 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/resume/extract", h.ExtractResume)
 	g("POST", "/job-tracker/ai/resume/report", h.GenerateResumeReport)
 	g("GET", "/job-tracker/ai/resume/report/latest", h.LatestResumeReport)
+	// Activity panel — history of past resume reports (no markdown, cursor-paged).
+	// Drill-in via the per-id endpoint below. See ADR-0007.
+	g("GET", "/job-tracker/ai/resume/reports", h.ListResumeReports)
+	g("GET", "/job-tracker/ai/resume/reports/{id}", h.GetResumeReport)
 	g("POST", "/job-tracker/ai/cover-letter", h.GenerateCoverLetter)
 	g("GET", "/job-tracker/ai/usage", h.AIUsage)
 

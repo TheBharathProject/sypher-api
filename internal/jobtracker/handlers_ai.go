@@ -278,6 +278,78 @@ func (h *Handler) LatestResumeReport(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, rep)
 }
 
+// ListResumeReports — GET /job-tracker/ai/resume/reports
+//
+// Query params (all optional):
+//
+//	cursor=<rfc3339> page after this createdAt (exclusive)
+//	limit=<n>        clamp to [1, 100], default 50
+//
+// Response: { items: AIReportSummary[], nextCursor: "..." | null }
+// Markdown bodies are NOT returned here — see GetResumeReport for drill-in.
+func (h *Handler) ListResumeReports(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+
+	opts := ListAIReportsOpts{}
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		t, err := time.Parse(time.RFC3339, cursor)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_cursor", "cursor must be RFC3339")
+			return
+		}
+		opts.Cursor = t
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil {
+			opts.Limit = n
+		}
+	}
+
+	items, lastTS, err := h.store.ListAIReports(r.Context(), uid, opts)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	var nextCursor string
+	if len(items) == limit && !lastTS.IsZero() {
+		nextCursor = lastTS.UTC().Format(time.RFC3339)
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"items":      items,
+		"nextCursor": nilIfBlank(nextCursor),
+	})
+}
+
+// GetResumeReport — GET /job-tracker/ai/resume/reports/{id}
+//
+// Returns the full AIReport (including markdown) for a single report owned
+// by the caller. 404 if the id doesn't exist or isn't owned.
+func (h *Handler) GetResumeReport(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "invalid report id")
+		return
+	}
+	rep, err := h.store.GetReport(r.Context(), uid, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "report not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, rep)
+}
+
 // ----------------------------------------------------------------------------
 // /ai/cover-letter
 // ----------------------------------------------------------------------------

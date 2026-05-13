@@ -347,9 +347,14 @@ func isValidSource(s string) bool {
 }
 
 // Reminder is the full row exposed via the reminders endpoints.
+// Company/Role are populated only by ListReminders (via JOIN); single-row
+// endpoints (Get/Create/Patch) leave them nil and the omitempty tags drop
+// them from those payloads.
 type Reminder struct {
 	ID            string  `json:"id"`
 	ApplicationID string  `json:"applicationId"`
+	Company       *string `json:"company,omitempty"`
+	Role          *string `json:"role,omitempty"`
 	TriggersAt    string  `json:"triggersAt"`
 	Note          *string `json:"note,omitempty"`
 	FiredAt       *string `json:"firedAt,omitempty"`

@@ -384,9 +384,23 @@ func (h *Handler) VoteOnCommunityPost(w http.ResponseWriter, r *http.Request) {
 // =============================================================================
 
 // ListCommunityComments GET /job-tracker/community/posts/{id}/comments
+// Accepts either a UUID or a slug in the {id} path parameter — mirrors
+// GetCommunityPost so the FE can use the same identifier for both calls.
+// Without this, the post detail page (which fires getPost + listComments
+// in parallel) would 400 the comments call on any slug-based URL.
 func (h *Handler) ListCommunityComments(w http.ResponseWriter, r *http.Request) {
-	postID, ok := pathUUID(w, r, "id")
-	if !ok {
+	idOrSlug := r.PathValue("id")
+	postID, err := h.resolvePostID(r.Context(), idOrSlug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "post not found")
+			return
+		}
+		if errors.Is(err, errBadPostID) {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_id", "invalid post id")
+			return
+		}
+		writeDBError(w, err)
 		return
 	}
 	comments, err := h.store.ListComments(r.Context(), postID)
@@ -395,6 +409,23 @@ func (h *Handler) ListCommunityComments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": comments})
+}
+
+// errBadPostID signals a path param that's neither a valid UUID nor a
+// non-empty slug. Surfaces as 400 from comment endpoints.
+var errBadPostID = errors.New("invalid post id")
+
+// resolvePostID returns the post UUID for either a UUID string or a slug.
+// Centralised so the comment endpoints stay short — see ADR-0005 for the
+// id-or-slug convention used by the post-detail surface.
+func (h *Handler) resolvePostID(ctx context.Context, idOrSlug string) (uuid.UUID, error) {
+	if idOrSlug == "" {
+		return uuid.Nil, errBadPostID
+	}
+	if parsed, err := uuid.Parse(idOrSlug); err == nil {
+		return parsed, nil
+	}
+	return h.store.PostIDFromSlug(ctx, idOrSlug)
 }
 
 // CreateCommunityComment POST /job-tracker/community/posts/{id}/comments

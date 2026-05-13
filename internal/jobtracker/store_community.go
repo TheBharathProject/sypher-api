@@ -237,6 +237,20 @@ func (s *Store) GetPost(ctx context.Context, postID uuid.UUID, viewerID *uuid.UU
 	return &p, nil
 }
 
+// PostIDFromSlug resolves a URL slug to the underlying post UUID without
+// loading the full post + author + vote payload. Used by handlers that
+// already know the path param is a slug and only need the id for a
+// downstream lookup (e.g. ListComments). Returns pgx.ErrNoRows if the
+// slug doesn't match.
+func (s *Store) PostIDFromSlug(ctx context.Context, slug string) (uuid.UUID, error) {
+	const q = `SELECT id FROM job_tracker.community_posts WHERE slug = $1`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, slug).Scan(&id); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
 // GetPostBySlug fetches a single post by its URL slug + author info.
 // Mirrors GetPost but filters on p.slug = $1 instead of p.id = $1.
 // ViewerID, when non-nil, fills MyVote.

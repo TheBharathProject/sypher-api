@@ -3,6 +3,8 @@ package jobtracker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,6 +41,25 @@ type AIReport struct {
 	ReportMD     string    `json:"reportMd"`
 	Score        int       `json:"score"`
 	CreatedAt    string    `json:"createdAt"`
+}
+
+// AIReportSummary is the row + JSON shape for GET /ai/resume/reports.
+// Drops the markdown body so list responses stay small; FE re-fetches per id.
+// ResumeFilename is joined from job_tracker.files and is nullable because
+// the FK is ON DELETE SET NULL (resume can be deleted after generating a report).
+type AIReportSummary struct {
+	ID             uuid.UUID `json:"id"`
+	ResumeFileID   *string   `json:"resumeFileId,omitempty"`
+	ResumeFilename *string   `json:"resumeFilename,omitempty"`
+	Score          int       `json:"score"`
+	CreatedAt      string    `json:"createdAt"`
+}
+
+// ListAIReportsOpts mirrors ListNotificationsOpts: cursor is the createdAt of
+// the last row from the prior page (exclusive); empty = first page.
+type ListAIReportsOpts struct {
+	Cursor time.Time
+	Limit  int
 }
 
 // CreateFile inserts a metadata row before the actual upload happens.
@@ -245,4 +266,85 @@ func (s *Store) LatestReport(ctx context.Context, userID uuid.UUID) (*AIReport, 
 		r.ResumeFileID = &fid
 	}
 	return &r, nil
+}
+
+// GetReport returns one report by id if the user owns it, else pgx.ErrNoRows.
+// Used by the Activity panel drill-in.
+func (s *Store) GetReport(ctx context.Context, userID, id uuid.UUID) (*AIReport, error) {
+	const q = `
+		SELECT id, resume_file_id, report_md, COALESCE(score, 0),
+		       to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM job_tracker.ai_reports
+		WHERE id = $1 AND user_id = $2
+	`
+	var r AIReport
+	var fileRef *uuid.UUID
+	err := s.pool.QueryRow(ctx, q, id, userID).Scan(&r.ID, &fileRef, &r.ReportMD, &r.Score, &r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if fileRef != nil {
+		fid := fileRef.String()
+		r.ResumeFileID = &fid
+	}
+	return &r, nil
+}
+
+// ListAIReports returns one page of summary rows for the user, newest first.
+// Markdown is intentionally NOT selected — list views render the score chip
+// and a filename, and a 50-row page with full bodies would balloon to MBs.
+// Cursor pages by created_at (exclusive). Limit clamps to [1, 100], default 50.
+// resume_file_id is FK with ON DELETE SET NULL, so the LEFT JOIN preserves
+// orphan rows (deleted resume) — Filename comes back as nil, score still shows.
+func (s *Store) ListAIReports(ctx context.Context, userID uuid.UUID, opts ListAIReportsOpts) ([]AIReportSummary, time.Time, error) {
+	limit := opts.Limit
+	switch {
+	case limit <= 0:
+		limit = 50
+	case limit > 100:
+		limit = 100
+	}
+
+	args := []any{userID, limit}
+	q := `
+		SELECT r.id, r.resume_file_id, f.file_name, COALESCE(r.score, 0),
+		       to_char(r.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+		       r.created_at
+		FROM job_tracker.ai_reports r
+		LEFT JOIN job_tracker.files f ON f.id = r.resume_file_id
+		WHERE r.user_id = $1
+	`
+	if !opts.Cursor.IsZero() {
+		args = append(args, opts.Cursor)
+		q += fmt.Sprintf(" AND r.created_at < $%d", len(args))
+	}
+	q += " ORDER BY r.created_at DESC LIMIT $2"
+
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer rows.Close()
+
+	out := make([]AIReportSummary, 0, limit)
+	var lastTS time.Time
+	for rows.Next() {
+		var (
+			row     AIReportSummary
+			fileRef *uuid.UUID
+			fname   *string
+			ts      time.Time
+		)
+		if err := rows.Scan(&row.ID, &fileRef, &fname, &row.Score, &row.CreatedAt, &ts); err != nil {
+			return nil, time.Time{}, err
+		}
+		if fileRef != nil {
+			s := fileRef.String()
+			row.ResumeFileID = &s
+		}
+		row.ResumeFilename = fname
+		out = append(out, row)
+		lastTS = ts
+	}
+	return out, lastTS, rows.Err()
 }
