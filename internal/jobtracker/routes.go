@@ -137,6 +137,8 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("GET", "/job-tracker/recruiters/{id}", h.GetRecruiter)
 	g("PATCH", "/job-tracker/recruiters/{id}", h.PatchRecruiter)
 	g("DELETE", "/job-tracker/recruiters/{id}", h.DeleteRecruiter)
+	// Phone is served separately — rate-limited (5/5min, 20/day) to protect sensitive data.
+	g("GET", "/job-tracker/recruiters/{id}/phone", h.GetRecruiterPhone)
 
 	// Reminders — per-application time-based nudges.
 	// The every-5-min cron job fires notifications when triggers_at passes.

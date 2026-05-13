@@ -84,6 +84,36 @@ func (h *Handler) PatchRecruiter(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, rec)
 }
 
+// GET /job-tracker/recruiters/{id}/phone
+// Rate-limited: 5 per 5 minutes and 20 per day per user.
+func (h *Handler) GetRecruiterPhone(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	if allowed, which := h.phoneRL.allow(uid.String()); !allowed {
+		if which == "day" {
+			w.Header().Set("Retry-After", "86400")
+			httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited",
+				"Daily limit reached: you can reveal 20 phone numbers per day. This protects sensitive contact data — try again tomorrow.")
+		} else {
+			w.Header().Set("Retry-After", "300")
+			httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited",
+				"Too many phone lookups: limit is 5 per 5 minutes. Sensitive data cannot be fetched in bulk — please wait before trying again.")
+		}
+		return
+	}
+
+	phone, err := h.store.GetRecruiterPhone(r.Context(), uid, id)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, RecruiterPhone{Phone: phone})
+}
+
 // DELETE /job-tracker/recruiters/{id}
 func (h *Handler) DeleteRecruiter(w http.ResponseWriter, r *http.Request) {
 	uid, _ := auth.UserID(r.Context())

@@ -377,17 +377,23 @@ type DueReminder struct {
 	Note          *string
 }
 
-// Recruiter is a personal (private) recruiter contact.
+// Recruiter is a personal (private) recruiter contact. Phone is intentionally
+// omitted here — it is served by the dedicated GET …/{id}/phone endpoint which
+// enforces its own rate limit to protect sensitive contact data.
 type Recruiter struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Email       string  `json:"email"`
 	Company     *string `json:"company,omitempty"`
 	LinkedinURL *string `json:"linkedinUrl,omitempty"`
-	Phone       *string `json:"phone,omitempty"`
 	Notes       *string `json:"notes,omitempty"`
 	CreatedAt   string  `json:"createdAt"`
 	UpdatedAt   string  `json:"updatedAt"`
+}
+
+// RecruiterPhone is the response body for GET /job-tracker/recruiters/{id}/phone.
+type RecruiterPhone struct {
+	Phone *string `json:"phone"`
 }
 
 // RecruiterInput is the POST body.

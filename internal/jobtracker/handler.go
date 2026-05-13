@@ -6,9 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/time/rate"
 
 	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
@@ -17,6 +20,63 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 	"github.com/TheBharathProject/sypher-api/internal/storage"
 )
+
+// phoneUserLimits holds two independent token-bucket limiters per user for the
+// recruiter phone-reveal endpoint: a short window (5/5min) and a daily cap (20/day).
+type phoneUserLimits struct {
+	shortLim *rate.Limiter // 5 burst, refills 1/min  → max 5 per 5-min window
+	dayLim   *rate.Limiter // 20 burst, refills 1/72min → max 20 per day
+	lastSeen time.Time
+}
+
+// phoneRateLimiter is a per-user dual-window rate limiter for phone reveals.
+type phoneRateLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*phoneUserLimits
+}
+
+func newPhoneRateLimiter() *phoneRateLimiter {
+	return &phoneRateLimiter{entries: make(map[string]*phoneUserLimits)}
+}
+
+// allow returns (true, "") when both limits have capacity, or
+// (false, "short"|"day") naming which limit was exceeded. Tokens are
+// consumed only when both limits approve — no token is wasted on a reject.
+func (p *phoneRateLimiter) allow(uid string) (ok bool, which string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	for k, v := range p.entries {
+		if now.Sub(v.lastSeen) > 25*time.Hour {
+			delete(p.entries, k)
+		}
+	}
+
+	e, exists := p.entries[uid]
+	if !exists {
+		e = &phoneUserLimits{
+			shortLim: rate.NewLimiter(rate.Every(time.Minute), 5),
+			dayLim:   rate.NewLimiter(rate.Every(72*time.Minute), 20),
+		}
+		p.entries[uid] = e
+	}
+	e.lastSeen = now
+
+	// Reserve from both; cancel if either is unavailable right now.
+	sr := e.shortLim.Reserve()
+	if sr.Delay() > 0 {
+		sr.Cancel()
+		return false, "short"
+	}
+	dr := e.dayLim.Reserve()
+	if dr.Delay() > 0 {
+		dr.Cancel()
+		sr.Cancel()
+		return false, "day"
+	}
+	return true, ""
+}
 
 // Handler bundles the dependencies every /job-tracker/* endpoint needs.
 // r2/ai/aiUsage/notifier are optional — Phase-1-only deployments leave
@@ -32,10 +92,17 @@ type Handler struct {
 	aiUsage      *ai.UsageStore
 	notifier     Notifier
 	billingStore *billing.Store // nil when billing isn't configured; AI fallback to credits is skipped
+	phoneRL      *phoneRateLimiter
 }
 
 func NewHandler(cfg *config.Config, store *Store, authStore *auth.Store, logger *slog.Logger) *Handler {
-	return &Handler{cfg: cfg, store: store, authStore: authStore, logger: logger}
+	return &Handler{
+		cfg:       cfg,
+		store:     store,
+		authStore: authStore,
+		logger:    logger,
+		phoneRL:   newPhoneRateLimiter(),
+	}
 }
 
 // WithStorage attaches a configured R2 client. Returns the Handler for chaining.
