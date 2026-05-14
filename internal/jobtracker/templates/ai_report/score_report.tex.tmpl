@@ -1,0 +1,181 @@
+{{- /*
+  Resume Score report — PDF template (v2). Mirrors the on-screen layout
+  from app/resume/page.tsx: cover (overall + ATS + verdict banner +
+  executive summary), section-scores bar page, per-section findings
+  pages, checklist pages (Common Mistakes / Do's & Don'ts / Stands Out),
+  and a prioritised Improvement Plan page.
+
+  Inputs: see scoreReportTemplateData in render_score_report.go. The
+  template is shape-stable across v1 and v2 reports — v1 inputs leave
+  `IsV2`, `AtsScore`, `Checklist`, `ImprovementPlan` zero/empty, so the
+  v2-specific blocks are skipped via {{if}} guards.
+*/ -}}
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}
+\usepackage{lmodern}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+% Declare the handful of Unicode glyphs the AI emits in checklist
+% titles / improvement-plan text. inputenc{utf8} covers the basics
+% but a few math/punctuation chars still need explicit declarations.
+\DeclareUnicodeCharacter{2264}{$\leq$}     % ≤
+\DeclareUnicodeCharacter{2265}{$\geq$}     % ≥
+\DeclareUnicodeCharacter{2192}{$\rightarrow$} % →
+\DeclareUnicodeCharacter{2013}{--}          % en-dash
+\DeclareUnicodeCharacter{2014}{---}         % em-dash
+\DeclareUnicodeCharacter{2018}{`}           % ‘
+\DeclareUnicodeCharacter{2019}{'}           % ’
+\DeclareUnicodeCharacter{201C}{``}          % “
+\DeclareUnicodeCharacter{201D}{''}          % ”
+\DeclareUnicodeCharacter{2022}{$\bullet$}   % •
+\DeclareUnicodeCharacter{00B7}{$\cdot$}     % ·
+
+\definecolor{tagfix}{HTML}{C0392B}
+\definecolor{tagimp}{HTML}{D68910}
+\definecolor{tagok}{HTML}{1E8449}
+\definecolor{tagna}{HTML}{6E6E6E}
+\definecolor{muted}{HTML}{4A4A4A}
+\definecolor{verdictYes}{HTML}{1E8449}
+\definecolor{verdictMaybe}{HTML}{D68910}
+\definecolor{verdictNo}{HTML}{C0392B}
+\definecolor{barFill}{HTML}{3A6F47}
+\definecolor{barTrack}{HTML}{E4E4E0}
+\definecolor{beforeBg}{HTML}{FBE9E5}
+\definecolor{afterBg}{HTML}{E5F2E8}
+
+\titleformat{\section}{\Large\bfseries\raggedright}{}{0pt}{}[\vspace{2pt}{\color{black!40}\titlerule}]
+\titlespacing{\section}{0pt}{14pt}{6pt}
+
+\setlist[itemize]{leftmargin=*,itemsep=4pt,topsep=4pt,parsep=0pt}
+
+\pagestyle{empty}
+
+\newcommand{\tagfindingFix}{\textbf{\textcolor{tagfix}{FIX}}\quad}
+\newcommand{\tagfindingImprove}{\textbf{\textcolor{tagimp}{IMPROVE}}\quad}
+\newcommand{\tagfindingGood}{\textbf{\textcolor{tagok}{GOOD}}\quad}
+
+\newcommand{\statusPass}{\textbf{\textcolor{tagok}{PASS}}\quad}
+\newcommand{\statusWarn}{\textbf{\textcolor{tagimp}{WARN}}\quad}
+\newcommand{\statusFail}{\textbf{\textcolor{tagfix}{FAIL}}\quad}
+\newcommand{\statusNa}{\textbf{\textcolor{tagna}{N/A}}\quad}
+
+\begin{document}
+
+\begin{center}
+  {\Huge\bfseries Resume Score}\\[6pt]
+  {\Huge\bfseries {{.OverallScore}} / 100}\\[6pt]
+  {{- if .IsV2}}
+  {\large\color{ {{- verdictColour .VerdictPile -}} }\textbf{ {{- verdictLabel .VerdictPile -}} }}\\[4pt]
+  {\itshape\color{muted} {{esc .VerdictTagline}}}\\[10pt]
+  {\large ATS score: \textbf{ {{- .AtsScore -}} } / 100}
+  {{- else}}
+  {\large\color{muted} Overall score}
+  {{- end}}
+\end{center}
+
+\vspace{16pt}
+
+{{- if .CoreDiagnosis}}
+\section*{Core Diagnosis}
+\noindent\textbf{ {{- esc .CoreDiagnosis.CoreProblem -}} }
+
+\vspace{6pt}
+
+\noindent\textbf{6-second verdict:} {{esc .CoreDiagnosis.SixSecondVerdict}}\\
+\noindent\textbf{Identity:} {{esc .CoreDiagnosis.IdentityLabel}}
+{{- if .CoreDiagnosis.ArchetypeLabel}}\\
+\noindent\textbf{Archetype:} {{esc .CoreDiagnosis.ArchetypeLabel}}
+{{- end}}
+
+{{- if .CoreDiagnosis.HiddenStory}}
+
+\vspace{6pt}
+
+\noindent\textit{The hidden story:} {{esc .CoreDiagnosis.HiddenStory}}
+{{- end}}
+
+\vspace{12pt}
+{{- end}}
+
+\section*{Executive Summary}
+{{esc .ExecutiveSummary}}
+
+{{if .IsV2}}
+\clearpage
+\section*{Section Scores}
+
+\begin{itemize}[leftmargin=0pt,label={}]
+{{- range .Sections}}
+  \item \makebox[3.6cm][l]{ {{- .Label -}} }
+        \makebox[1.0cm][r]{ {{- .Score -}} }\quad
+        \begin{tikzpicture}[overlay]\end{tikzpicture}%
+        {\color{barFill}\rule{ {{- barWidth .Score -}} cm}{8pt}}%
+        {\color{barTrack}\rule{ {{- barTrackWidth .Score -}} cm}{8pt}}
+{{- end}}
+\end{itemize}
+{{end}}
+
+{{range .Sections}}
+\clearpage
+
+\section*{ {{- .Label -}} \hfill {\normalfont\large {{.Score}} / 100}}
+
+{{if .Counts}}{\color{muted}\small {{.Counts}}}\\[8pt]{{end}}
+
+{{if .Findings}}
+\begin{itemize}
+{{- range .Findings}}
+  \item {{tagMacro .Tag}}{{esc .Text}}
+{{- end}}
+\end{itemize}
+{{else}}
+{\color{muted}\itshape No findings for this section.}
+{{end}}
+{{end}}
+
+{{if .IsV2}}
+{{if .Checklist}}
+\clearpage
+\section*{Checklist}
+
+{{range .Checklist}}
+\subsection*{ {{- .Label -}} }
+\begin{itemize}[leftmargin=*]
+{{- range .Items}}
+  \item {{checklistStatusMacro .Status}}\textbf{ {{- esc .Title -}} }\\
+        {\color{muted}\small {{esc .Evidence}}}
+{{- end}}
+\end{itemize}
+{{end}}
+{{end}}
+
+{{if .ImprovementPlan}}
+\clearpage
+\section*{Improvement Plan}
+
+\begin{enumerate}[leftmargin=*]
+{{- range $i, $item := .ImprovementPlan}}
+  \item \textbf{ {{- esc $item.Title -}} }\\[2pt]
+        {\color{muted}\small effort: {{$item.Effort}} \quad · \quad impact: {{$item.Impact}}}\\
+        {\color{muted}\small Where: {{esc $item.Where}}}\\[4pt]
+        \begin{tcolorbox}[colback=beforeBg,colframe=beforeBg,boxrule=0pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt]\textbf{Before:} {{esc $item.Before}}\end{tcolorbox}
+        \begin{tcolorbox}[colback=afterBg,colframe=afterBg,boxrule=0pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt]\textbf{After:} {{esc $item.After}}\end{tcolorbox}
+        {{- if $item.Why}}
+        {\color{muted}\small\textbf{Why:} {{esc $item.Why}}}\\[4pt]
+        {{- end}}
+        \vspace{8pt}
+{{- end}}
+\end{enumerate}
+{{end}}
+{{end}}
+
+\end{document}

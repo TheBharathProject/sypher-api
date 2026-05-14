@@ -1,0 +1,111 @@
+\documentclass[11pt,a4paper]{article}
+
+% --- Layout ----------------------------------------------------------------
+\usepackage[margin=0.7in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{arydshln}
+
+% Accent colour — drives section rule + link colour. Falls back to near-black
+% if the user hasn't tweaked it.
+\definecolor{accent}{HTML}{ {{- accentHex .Style.AccentColor -}} }
+\hypersetup{colorlinks=true,urlcolor=accent}
+
+{{- if eq .Style.FontFamily "sans"}}
+\renewcommand{\familydefault}{\sfdefault}
+{{- end}}
+
+% Section header — divider style is one of: solid | dashed | none. The
+% rule (when present) takes the accent colour.
+\titleformat{\section}{\Large\bfseries\raggedright}{}{0pt}{}[
+  {{- if eq .Style.SectionDivider "solid" -}}
+    \vspace{2pt}{\color{accent}\titlerule}
+  {{- else if eq .Style.SectionDivider "dashed" -}}
+    \vspace{2pt}{\color{accent}\hdashrule[0.5ex]{\linewidth}{0.4pt}{2pt}}
+  {{- end -}}
+]
+\titlespacing{\section}{0pt}{10pt}{6pt}
+
+% Compact bullet lists. ATS parsers handle \item fine when the underlying
+% glyph is selectable.
+\setlist[itemize]{leftmargin=*,itemsep=2pt,topsep=2pt,parsep=0pt}
+
+\pagestyle{empty}
+
+% --- Document --------------------------------------------------------------
+\begin{document}
+
+{{- if eq .Style.HeaderAlignment "left"}}
+\noindent
+{\LARGE\bfseries {{esc .Personal.Name}}}\\[2pt]
+{{- if .Personal.Headline}}
+{\large {{esc .Personal.Headline}}}\\[3pt]
+{{- end}}
+{{contactLine .Personal}}
+{{- else}}
+\begin{center}
+  {\LARGE\bfseries {{esc .Personal.Name}}}\\[2pt]
+  {{- if .Personal.Headline}}
+  {\large {{esc .Personal.Headline}}}\\[3pt]
+  {{- end}}
+  {{contactLine .Personal}}
+\end{center}
+{{- end}}
+
+\vspace{4pt}
+
+{{- if .Summary}}
+\section*{Summary}
+{{esc .Summary}}
+{{- end}}
+
+{{- if .Experiences}}
+\section*{Experience}
+{{- range .Experiences}}
+
+\noindent\textbf{ {{- esc .Title -}} } \hfill {{dateRange .StartDate .EndDate .Current}}\\
+\textit{ {{- esc .Company -}} }{{if .Location}} \hfill {{esc .Location}}{{end}}
+{{- if .Description}}
+\begin{itemize}
+  {{- range .Description}}
+  \item {{esc .}}
+  {{- end}}
+\end{itemize}
+{{- else}}\\[6pt]
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{- if .Educations}}
+\section*{Education}
+{{- range .Educations}}
+
+\noindent\textbf{ {{- esc .School -}} } \hfill {{dateRange .StartDate .EndDate false}}\\
+{{if .Degree}}{{esc .Degree}}{{end}}{{if .Field}}{{if .Degree}}, {{end}}{{esc .Field}}{{end}}{{if .GPA}} \hfill GPA: {{esc .GPA}}{{end}}
+{{- if .Description}}\\{{esc .Description}}{{- end}}
+{{- end}}
+{{- end}}
+
+{{- if .Skills}}
+\section*{Skills}
+\begin{itemize}
+  {{- range .Skills}}
+  \item \textbf{ {{- esc .Category -}}: } {{escJoin .Items}}
+  {{- end}}
+\end{itemize}
+{{- end}}
+
+{{- if .Projects}}
+\section*{Projects}
+{{- range .Projects}}
+
+\noindent\textbf{ {{- esc .Name -}} }{{if .TechStack}} \textit{ ({{esc .TechStack}}) }{{end}}
+{{- if .Description}}\\{{esc .Description}}{{- end}}
+{{- if .Link}}\\\href{ {{- .Link -}} }{ {{- esc .Link -}} }{{- end}}
+{{- end}}
+{{- end}}
+
+\end{document}

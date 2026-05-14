@@ -72,7 +72,12 @@ func FireDueReminders(store reminderStore, notifier reminderNotifier, logger *sl
 }
 
 // linkPath returns a pointer to the application link path for in-app nav.
+// basePath-relative (no `/pegasus` prefix) — the FE's router.push()
+// prepends basePath automatically. The FE applications page reads
+// `?view=<id>` to auto-open the detail panel (see job-tracker/app/
+// applications/page.tsx); the redirector at app/applications/[id]/page.tsx
+// also rewrites /applications/<id> to the same `?view=` form.
 func linkPath(appID uuid.UUID) *string {
-	s := fmt.Sprintf("/pegasus/applications?focus=%s", appID)
+	s := fmt.Sprintf("/applications?view=%s", appID)
 	return &s
 }

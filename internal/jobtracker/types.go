@@ -420,3 +420,138 @@ type RecruiterEdit struct {
 	Phone       *string `json:"phone,omitempty"`
 	Notes       *string `json:"notes,omitempty"`
 }
+
+// ============================================================================
+// Resume Builder — drafts authored from scratch via the in-app builder.
+// Schema lives in migrations/0022_resume_builder_drafts.sql; compiled PDFs
+// land in job_tracker.files (kind='resume') through the existing Vault flow.
+// ============================================================================
+
+// DraftPersonal is the resume's header block.
+type DraftPersonal struct {
+	Name        string `json:"name"`
+	Headline    string `json:"headline,omitempty"`
+	Email       string `json:"email,omitempty"`
+	Phone       string `json:"phone,omitempty"`
+	Location    string `json:"location,omitempty"`
+	LinkedinURL string `json:"linkedinUrl,omitempty"`
+	GithubURL   string `json:"githubUrl,omitempty"`
+	WebsiteURL  string `json:"websiteUrl,omitempty"`
+}
+
+// DraftExperience is one job entry; bullets are pre-split so the LaTeX
+// template can render each as its own \item without parsing newlines.
+type DraftExperience struct {
+	Company     string   `json:"company"`
+	Title       string   `json:"title"`
+	Location    string   `json:"location,omitempty"`
+	StartDate   string   `json:"startDate,omitempty"` // free-form, e.g. "Jan 2024"
+	EndDate     string   `json:"endDate,omitempty"`
+	Current     bool     `json:"current"`
+	Description []string `json:"description,omitempty"`
+}
+
+// DraftEducation mirrors profile.educations one-for-one.
+type DraftEducation struct {
+	School      string `json:"school"`
+	Degree      string `json:"degree,omitempty"`
+	Field       string `json:"field,omitempty"`
+	StartDate   string `json:"startDate,omitempty"`
+	EndDate     string `json:"endDate,omitempty"`
+	GPA         string `json:"gpa,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// DraftProject — short project block. TechStack is a free-form comma-joined
+// string (same shape as profile.projects.techStack) so the LaTeX template
+// can render it inline without splitting.
+type DraftProject struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	TechStack   string `json:"techStack,omitempty"`
+	Link        string `json:"link,omitempty"`
+}
+
+// DraftSkillGroup is one labelled bucket of skills, e.g. {"Languages",
+// ["Go", "TypeScript", "Python"]}. Categorising in the data avoids the
+// FE having to derive groupings at render time.
+type DraftSkillGroup struct {
+	Category string   `json:"category"`
+	Items    []string `json:"items"`
+}
+
+// DraftStyle is the user-tweakable visual options on top of the chosen
+// template. Defaults preserve the v1 look; non-defaults are honoured by
+// both the live HTML preview (CSS variables) and the LaTeX compile
+// (template parameters). All fields are stable enums or hex strings so a
+// stored draft never breaks if the engine version changes.
+type DraftStyle struct {
+	AccentColor     string `json:"accentColor,omitempty"`     // "#1a1a1a" by default; controls section rule + link colour
+	SectionDivider  string `json:"sectionDivider,omitempty"`  // "solid" (default) | "dashed" | "none"
+	FontFamily      string `json:"fontFamily,omitempty"`      // "serif" (Latin Modern, default) | "sans" (Helvetica)
+	HeaderAlignment string `json:"headerAlignment,omitempty"` // "center" (default) | "left"
+}
+
+// DraftContent is the full form payload — stored as JSONB in the
+// resume_builder_drafts.content column. Stable for the lifetime of
+// template 'classic-v1'; new templates may want richer shapes.
+//
+// CustomTeX, when non-empty, completely overrides the template-driven
+// render path. The editor's "LaTeX source" mode writes here so a power
+// user can hand-edit the .tex before export without losing the rest of
+// the structured data (form data stays in place; flipping back to "Form"
+// just discards CustomTeX).
+type DraftContent struct {
+	Personal    DraftPersonal     `json:"personal"`
+	Summary     string            `json:"summary,omitempty"`
+	Experiences []DraftExperience `json:"experiences,omitempty"`
+	Educations  []DraftEducation  `json:"educations,omitempty"`
+	Projects    []DraftProject    `json:"projects,omitempty"`
+	Skills      []DraftSkillGroup `json:"skills,omitempty"`
+	Style       DraftStyle        `json:"style,omitempty"`
+	CustomTeX   string            `json:"customTex,omitempty"`
+}
+
+// ResumeBuilderDraft is the full row exposed at GET …/drafts/{id}.
+type ResumeBuilderDraft struct {
+	ID         string       `json:"id"`
+	Title      string       `json:"title"`
+	TemplateID string       `json:"templateId"`
+	Content    DraftContent `json:"content"`
+	CreatedAt  string       `json:"createdAt"`
+	UpdatedAt  string       `json:"updatedAt"`
+}
+
+// ResumeBuilderDraftSummary is the lightweight shape returned by the
+// list endpoint — drops the content payload so the drafts rail stays
+// cheap to render even if a draft has 50 bullets.
+type ResumeBuilderDraftSummary struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	TemplateID string `json:"templateId"`
+	CreatedAt  string `json:"createdAt"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+// ResumeBuilderDraftInput is the POST body for creating a draft.
+type ResumeBuilderDraftInput struct {
+	Title      string       `json:"title"`
+	TemplateID string       `json:"templateId,omitempty"` // defaults to 'classic-v1'
+	Content    DraftContent `json:"content"`
+}
+
+// ResumeBuilderDraftEdit is the PATCH body — all fields optional so the
+// FE can autosave just the bits that changed.
+type ResumeBuilderDraftEdit struct {
+	Title      *string       `json:"title,omitempty"`
+	TemplateID *string       `json:"templateId,omitempty"`
+	Content    *DraftContent `json:"content,omitempty"`
+}
+
+// SaveToVaultInput is the body for POST …/drafts/{id}/save-to-vault.
+// Slot is required so the user explicitly chooses which Vault slot the
+// compiled PDF replaces (1..5 per the existing Vault contract).
+type SaveToVaultInput struct {
+	Slot  int    `json:"slot"`
+	Label string `json:"label,omitempty"`
+}

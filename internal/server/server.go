@@ -45,8 +45,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Server {
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       20 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// WriteTimeout covers the slowest endpoint: AI calls. The v2.1
+		// Resume Score prompt routinely runs 35-45s end-to-end, and
+		// resume tweaks / cover letters can hit 30s+. Anything below
+		// 60s starts killing the response mid-write — the FE then
+		// never sees the new report id and the redirect to
+		// /resume?id=… fails silently. 120s is comfortably above
+		// worst-case AI generation while still bounded.
+		// Per-call deadlines (e.g. the DeepSeek client's 90s ctx) keep
+		// genuinely-stuck calls from holding goroutines forever.
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	return s
 }
@@ -90,6 +99,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /auth/google", authHandler.GoogleStart)
 	mux.HandleFunc("GET /auth/google/callback", authHandler.GoogleCallback)
 	mux.HandleFunc("POST /auth/logout", authHandler.Logout)
+	mux.Handle("GET /auth/me", requireUser(http.HandlerFunc(authHandler.CurrentUser)))
 
 	// Phase 2: best-effort init of R2 + Deepseek. If creds aren't set, the
 	// related endpoints respond 503 instead of refusing to boot.
@@ -113,6 +123,17 @@ func (s *Server) routes() http.Handler {
 		s.logger.Info("deepseek configured", "model", s.cfg.DeepseekModel)
 	} else {
 		s.logger.Info("deepseek skipped", "reason", err.Error())
+	}
+
+	// LaTeX compile service — yotech/latex-on-http or compatible sidecar.
+	// When LATEX_SERVICE_URL is unset, Resume Builder PDF endpoints respond
+	// 503 (same graceful-degrade pattern as R2/Deepseek). See the plan in
+	// ~/.claude/plans/abundant-mixing-whisper.md for the sidecar setup.
+	if s.cfg.LatexServiceURL != "" {
+		jtHandler.WithLatexService(s.cfg.LatexServiceURL)
+		s.logger.Info("latex service configured", "url", s.cfg.LatexServiceURL)
+	} else {
+		s.logger.Info("latex service skipped", "reason", "LATEX_SERVICE_URL not set")
 	}
 
 	// Phase 2: mailer + notifier + cron. Mailer falls back to slog if

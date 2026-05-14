@@ -93,6 +93,10 @@ type Handler struct {
 	notifier     Notifier
 	billingStore *billing.Store // nil when billing isn't configured; AI fallback to credits is skipped
 	phoneRL      *phoneRateLimiter
+	// latexServiceURL is the sidecar URL Resume Builder PDF compiles
+	// route through (yotech/latex-on-http or compatible). Empty when
+	// LATEX_SERVICE_URL isn't set — render endpoints respond 503.
+	latexServiceURL string
 }
 
 func NewHandler(cfg *config.Config, store *Store, authStore *auth.Store, logger *slog.Logger) *Handler {
@@ -133,6 +137,16 @@ func (h *Handler) WithNotifier(n Notifier) *Handler {
 // the token cap (same as before billing landed).
 func (h *Handler) WithBilling(bs *billing.Store) *Handler {
 	h.billingStore = bs
+	return h
+}
+
+// WithLatexService points Resume Builder PDF rendering at a sidecar
+// container running yotech/latex-on-http (or a compatible HTTP API).
+// When unset (empty string), the /render/pdf + /save-to-vault endpoints
+// respond 503 latex_service_unavailable and the FE falls back to
+// showing the raw .tex source. See ADR-tbd for the sidecar pattern.
+func (h *Handler) WithLatexService(url string) *Handler {
+	h.latexServiceURL = url
 	return h
 }
 

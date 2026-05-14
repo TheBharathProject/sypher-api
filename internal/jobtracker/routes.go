@@ -120,6 +120,19 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/ai/cover-letter", h.GenerateCoverLetter)
 	g("GET", "/job-tracker/ai/usage", h.AIUsage)
 
+	// Resume Builder — in-app authoring tool that produces ATS-friendly
+	// LaTeX-compiled PDFs. Drafts are CRUD; render endpoints compile via
+	// Tectonic; save-to-vault lands the PDF in job_tracker.files. See
+	// migrations/0022 and resume_builder_render.go.
+	g("GET", "/job-tracker/resume-builder/drafts", h.ListResumeBuilderDrafts)
+	g("POST", "/job-tracker/resume-builder/drafts", h.CreateResumeBuilderDraft)
+	g("GET", "/job-tracker/resume-builder/drafts/{id}", h.GetResumeBuilderDraft)
+	g("PATCH", "/job-tracker/resume-builder/drafts/{id}", h.PatchResumeBuilderDraft)
+	g("DELETE", "/job-tracker/resume-builder/drafts/{id}", h.DeleteResumeBuilderDraft)
+	g("POST", "/job-tracker/resume-builder/drafts/{id}/render/tex", h.RenderResumeBuilderTex)
+	g("POST", "/job-tracker/resume-builder/drafts/{id}/render/pdf", h.RenderResumeBuilderPDF)
+	g("POST", "/job-tracker/resume-builder/drafts/{id}/save-to-vault", h.SaveResumeBuilderToVault)
+
 	// Resume tweaks — versioned AI rewrites. POST charges 20 credits
 	// once the 25k-token free monthly quota is exhausted. List/get/patch/
 	// delete are free. Schema: migrations/0015_resume_tweaks.sql.
@@ -134,6 +147,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/ai/cover-letter/pdf", h.CoverLetterPDF)
 	g("GET", "/job-tracker/ai/resume/tweaks/{id}/pdf", h.ResumeTweakPDF)
 	g("GET", "/job-tracker/ai/resume/report/latest/pdf", h.LatestResumeReportPDF)
+	g("GET", "/job-tracker/ai/resume/reports/{id}/pdf", h.ScoreReportPDF)
 
 	// Personal Recruiters — private CRM, distinct from /community/recruiters.
 	g("GET", "/job-tracker/recruiters", h.ListRecruiters)

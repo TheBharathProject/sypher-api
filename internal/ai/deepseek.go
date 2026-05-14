@@ -162,6 +162,96 @@ Be specific and actionable. Avoid generic advice.`
 	return c.complete(ctx, system, resumeText, 0.4)
 }
 
+// ResumeScoreReport (v1 shim) produces a structured Resume Score
+// report without the LaTeX-source path. Kept so legacy callers that
+// don't have the source still link. New code should call
+// ResumeScoreReportV2.
+func (c *Client) ResumeScoreReport(ctx context.Context, resumeText, level, targetRole, jobDescription string) (*ScoreReport, *CompletionResult, error) {
+	return c.ResumeScoreReportV2(ctx, resumeText, "", "", level, targetRole, jobDescription)
+}
+
+// ResumeScoreReportV2 produces the v2 structured Resume Score report —
+// includes core diagnosis, ATS score, verdict pile, ~42-item audit
+// checklist, and a prioritised improvement plan with before/after
+// rewrites + why.
+//
+// Two optional side-channels feed the model formatting cues:
+//   - `latexSource` (best): the resume's LaTeX source. Available only
+//     when scoring a Resume Builder draft. Covers every source-dependent
+//     checklist item.
+//   - `pdfMetadata` (fallback): a human-readable summary of structural
+//     cues from an uploaded PDF (page count, fonts, bullet glyphs,
+//     column heuristic, image count). Covers ~6 of the 8 source-
+//     dependent items.
+//
+// Pass both empty for raw-text input; the prompt tells the model to
+// mark source-dependent items as "na" rather than guessing.
+//
+// On JSON parse failure, retries ONCE with the parse error appended.
+// Temperature 0.3 — deterministic enough to be stable on re-run.
+//
+// Returns (parsed report, raw completion stats for usage accounting, err).
+func (c *Client) ResumeScoreReportV2(ctx context.Context, resumeText, latexSource, pdfMetadata, level, targetRole, jobDescription string) (*ScoreReport, *CompletionResult, error) {
+	user := buildScoreUserPromptV2(resumeText, latexSource, pdfMetadata, level, targetRole, jobDescription)
+	res, err := c.complete(ctx, scoreReportSystemPromptV2, user, 0.3)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	report, parseErr := parseScoreReport(res.Text)
+	if parseErr == nil {
+		return report, res, nil
+	}
+
+	// Retry once with the parse error inlined — sometimes the model
+	// wraps the JSON in a markdown fence or adds a trailing comment;
+	// pointing at the error reliably gets a clean second response.
+	retryUser := user + "\n\n" + scoreReportRetryPromptV2(parseErr.Error())
+	res2, err := c.complete(ctx, scoreReportSystemPromptV2, retryUser, 0.2)
+	if err != nil {
+		return nil, nil, fmt.Errorf("score report retry: %w", err)
+	}
+	report, parseErr2 := parseScoreReport(res2.Text)
+	if parseErr2 != nil {
+		return nil, res2, fmt.Errorf("score report: malformed JSON after retry: %w", parseErr2)
+	}
+	// Combine token counts so usage accounting reflects both calls.
+	res2.TokensIn += res.TokensIn
+	res2.TokensOut += res.TokensOut
+	return report, res2, nil
+}
+
+// parseScoreReport tolerates a few common model quirks before
+// json.Unmarshal: leading/trailing whitespace, accidental markdown
+// code fences, and a leading "json" tag.
+func parseScoreReport(raw string) (*ScoreReport, error) {
+	s := strings.TrimSpace(raw)
+	// Strip ```json ... ``` fences if present.
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```json")
+		s = strings.TrimPrefix(s, "```")
+		s = strings.TrimSuffix(s, "```")
+		s = strings.TrimSpace(s)
+	}
+	// Slice from the first '{' to the last '}' — guards against a
+	// trailing "thoughts" tail the model occasionally emits.
+	if start := strings.Index(s, "{"); start > 0 {
+		s = s[start:]
+	}
+	if end := strings.LastIndex(s, "}"); end >= 0 && end < len(s)-1 {
+		s = s[:end+1]
+	}
+
+	var r ScoreReport
+	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		return nil, err
+	}
+	if r.Sections == nil {
+		return nil, errors.New("score report: missing sections map")
+	}
+	return &r, nil
+}
+
 // CoverLetter writes a tailored cover letter from a JD + resume snippet.
 func (c *Client) CoverLetter(ctx context.Context, jobDescription, resumeText string) (*CompletionResult, error) {
 	const system = `You write tight, specific cover letters. Produce 3-4 short paragraphs in plain prose.

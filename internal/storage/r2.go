@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -84,6 +85,23 @@ func (r *R2) PresignGet(ctx context.Context, key string, ttl time.Duration) (str
 		return "", fmt.Errorf("presign get: %w", err)
 	}
 	return out.URL, nil
+}
+
+// Put uploads bytes directly from the server. Used for artifacts generated
+// server-side (e.g. resume-builder compiled PDFs) where bouncing through a
+// presigned-URL round-trip via the browser would be wasteful. Content-Type
+// is required so range-fetches + inline-iframe viewing behave correctly.
+func (r *R2) Put(ctx context.Context, key, contentType string, body []byte) error {
+	_, err := r.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &r.bucket,
+		Key:         &key,
+		ContentType: &contentType,
+		Body:        bytes.NewReader(body),
+	})
+	if err != nil {
+		return fmt.Errorf("put object: %w", err)
+	}
+	return nil
 }
 
 // FetchAll downloads the object and returns its full body. Used by the

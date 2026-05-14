@@ -120,6 +120,19 @@ func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+// UpsertToolAccess records that a user has accessed a given Sypher tool.
+// On first login it inserts a row; on subsequent logins it bumps last_seen.
+// The tool string should match a known product slug ("pegasus", "kairos").
+func (s *Store) UpsertToolAccess(ctx context.Context, userID uuid.UUID, tool string) error {
+	const q = `
+		INSERT INTO auth.user_tool_access (user_id, tool)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, tool) DO UPDATE SET last_seen = NOW()
+	`
+	_, err := s.pool.Exec(ctx, q, userID, tool)
+	return err
+}
+
 // IssueAPIToken creates a new token for the user. Returns the *plain*
 // token once (caller must show it to the user immediately) plus the row
 // metadata. Storage holds only the hash.

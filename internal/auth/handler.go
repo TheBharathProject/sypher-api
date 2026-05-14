@@ -43,25 +43,44 @@ func (h *Handler) WithProvisioner(p ProfileProvisioner) *Handler {
 	return h
 }
 
-const oauthStateCookie = "sypher_oauth_state"
+const (
+	oauthStateCookie = "sypher_oauth_state"
+	oauthToolCookie  = "sypher_oauth_tool"
+)
 
 // GoogleStart redirects to Google's OAuth consent screen.
-// Sets a short-lived state cookie so the callback can verify origin.
+// Accepts an optional ?tool=<name> query param so the callback can redirect
+// to the correct tool's frontend after login (e.g. kairos vs pegasus).
 func (h *Handler) GoogleStart(w http.ResponseWriter, r *http.Request) {
 	state, err := RandomState()
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "could not generate state")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookie,
-		Value:    state,
+
+	cookieOpts := &http.Cookie{
 		Path:     "/auth",
 		Expires:  time.Now().Add(10 * time.Minute),
 		HttpOnly: true,
 		Secure:   h.cfg.Env == "prod",
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+
+	stateCookie := *cookieOpts
+	stateCookie.Name = oauthStateCookie
+	stateCookie.Value = state
+	http.SetCookie(w, &stateCookie)
+
+	// Persist which tool initiated login so GoogleCallback can redirect back
+	// to the right frontend. Unrecognised tool names fall back to the default.
+	tool := r.URL.Query().Get("tool")
+	if tool == "" {
+		tool = "pegasus"
+	}
+	toolCookie := *cookieOpts
+	toolCookie.Name = oauthToolCookie
+	toolCookie.Value = tool
+	http.SetCookie(w, &toolCookie)
 
 	authURL := BuildGoogleAuthURL(h.cfg.GoogleOAuthClientID, h.cfg.GoogleOAuthRedirectURL, state)
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -88,16 +107,26 @@ func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		h.redirectFailure(w, r, "bad_state")
 		return
 	}
-	// Clear the state cookie ASAP.
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookie,
-		Value:    "",
+
+	// Read which tool initiated this login before clearing cookies.
+	tool := "pegasus"
+	if tc, err := r.Cookie(oauthToolCookie); err == nil && tc.Value != "" {
+		tool = tc.Value
+	}
+
+	clear := &http.Cookie{
 		Path:     "/auth",
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   h.cfg.Env == "prod",
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	stateClear := *clear
+	stateClear.Name = oauthStateCookie
+	http.SetCookie(w, &stateClear)
+	toolClear := *clear
+	toolClear.Name = oauthToolCookie
+	http.SetCookie(w, &toolClear)
 
 	prof, err := ExchangeCode(r.Context(),
 		h.cfg.GoogleOAuthClientID, h.cfg.GoogleOAuthClientSecret, h.cfg.GoogleOAuthRedirectURL, code)
@@ -112,6 +141,12 @@ func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("upsert user", "err", err)
 		h.redirectFailure(w, r, "upsert_failed")
 		return
+	}
+
+	// Record which tool this user logged in through. Failure is non-fatal —
+	// the login itself must not be blocked by an analytics write.
+	if err := h.store.UpsertToolAccess(r.Context(), user.ID, tool); err != nil {
+		h.logger.Warn("upsert tool access", "user_id", user.ID, "tool", tool, "err", err)
 	}
 
 	// Run any per-tool post-login provisioning (profile row, slug, etc.)
@@ -131,9 +166,10 @@ func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dest, err := url.Parse(h.cfg.FrontendLoginRedirect)
+	redirectURL := h.redirectURLForTool(tool)
+	dest, err := url.Parse(redirectURL)
 	if err != nil {
-		h.logger.Error("parse frontend redirect", "err", err)
+		h.logger.Error("parse frontend redirect", "err", err, "tool", tool)
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "bad frontend redirect")
 		return
 	}
@@ -150,8 +186,24 @@ func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest.String(), http.StatusFound)
 }
 
+// redirectURLForTool returns the frontend callback URL for the given tool name.
+// Falls back to the default FrontendLoginRedirect for unknown tools.
+func (h *Handler) redirectURLForTool(tool string) string {
+	switch tool {
+	case "kairos":
+		if h.cfg.KairosFrontendLoginRedirect != "" {
+			return h.cfg.KairosFrontendLoginRedirect
+		}
+	}
+	return h.cfg.FrontendLoginRedirect
+}
+
 func (h *Handler) redirectFailure(w http.ResponseWriter, r *http.Request, reason string) {
-	dest, err := url.Parse(h.cfg.FrontendLoginRedirect)
+	tool := "pegasus"
+	if tc, err := r.Cookie(oauthToolCookie); err == nil && tc.Value != "" {
+		tool = tc.Value
+	}
+	dest, err := url.Parse(h.redirectURLForTool(tool))
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "bad frontend redirect")
 		return

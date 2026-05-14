@@ -42,6 +42,17 @@
 #         RAZORPAY_PLAN_ID_PLUS            — plan_xxx for ₹299/mo Premium+ tier
 #                                            (premium + 200 credits/cycle). Optional;
 #                                            empty hides the Premium+ card on /upgrade.
+#         LATEX_SERVICE_URL                — base URL of the LaTeX compile
+#                                            sidecar. Without this, Resume
+#                                            Builder PDF exports return 503
+#                                            and the FE falls back to .tex.
+#                                            One-time setup on the VM:
+#                                              docker pull yotech/latex-on-http
+#                                              docker run -d --name sypher-tex \
+#                                                --network sypher-net \
+#                                                --restart unless-stopped \
+#                                                yotech/latex-on-http
+#                                            Then set LATEX_SERVICE_URL=http://sypher-tex.
 #       Optional with sane defaults (override only if you know why):
 #         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
 #         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)
@@ -125,13 +136,18 @@ OPTIONAL_VARS=(
   RAZORPAY_PLAN_ID
   RAZORPAY_PLAN_ID_PLUS
   SLACK_FEEDBACK_WEBHOOK_URL
+  # LaTeX sidecar URL (yotech/latex-on-http). Without it, Resume Builder
+  # PDF endpoints return 503. Container is started manually on the VM —
+  # see the comment block at the top of this script.
+  LATEX_SERVICE_URL
 )
 
 # Warn (don't fail) on missing optionals so a half-configured deploy is loud.
 for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_URL \
          DEEPSEEK_API_KEY RESEND_API_KEY MAIL_FROM_ADDRESS \
          RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET \
-         RAZORPAY_PLAN_ID RAZORPAY_PLAN_ID_PLUS; do
+         RAZORPAY_PLAN_ID RAZORPAY_PLAN_ID_PLUS \
+         LATEX_SERVICE_URL; do
   if [ -z "${!v:-}" ]; then
     echo "??? $v unset — feature(s) depending on it will be degraded" >&2
   fi

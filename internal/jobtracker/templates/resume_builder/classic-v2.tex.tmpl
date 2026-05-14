@@ -1,0 +1,124 @@
+{{- /*
+  classic-v2 template. The FE parser in
+  job-tracker/lib/resume-builder/templates/classic-v2.ts anchors on the
+  macros emitted here — see that file's header for the round-trip
+  contract. Keep authoring notes inside Go-template comments only; never
+  use LaTeX %-comments here because they ship in the rendered .tex that
+  the user sees in LaTeX mode.
+*/ -}}
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=0.7in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{arydshln}
+
+\definecolor{accent}{HTML}{ {{- accentHex .Style.AccentColor -}} }
+\hypersetup{colorlinks=true,urlcolor=accent}
+
+{{- if eq .Style.FontFamily "sans"}}
+\renewcommand{\familydefault}{\sfdefault}
+{{- end}}
+
+\titleformat{\section}{\Large\bfseries\raggedright}{}{0pt}{}[
+  {{- if eq .Style.SectionDivider "solid" -}}
+    \vspace{2pt}{\color{accent}\titlerule}
+  {{- else if eq .Style.SectionDivider "dashed" -}}
+    \vspace{2pt}{\color{accent}\hdashrule[0.5ex]{\linewidth}{0.4pt}{2pt}}
+  {{- end -}}
+]
+\titlespacing{\section}{0pt}{10pt}{6pt}
+
+\setlist[itemize]{leftmargin=*,itemsep=2pt,topsep=2pt,parsep=0pt}
+
+\pagestyle{empty}
+
+\begin{document}
+{{- /* Header is gated on Name — `\\[2pt]` on an empty group fails with
+       "no line here to end". Once Name is set the header reappears. */ -}}
+{{- $contact := contactLine .Personal -}}
+{{- if .Personal.Name}}
+{{- if eq .Style.HeaderAlignment "left"}}
+\noindent {\LARGE\bfseries {{esc .Personal.Name}}}
+{{- if .Personal.Headline}}\\[2pt]
+{\large {{esc .Personal.Headline}}}
+{{- end}}
+{{- if $contact}}\\[3pt]
+{{$contact}}
+{{- end}}
+{{- else}}
+\begin{center}
+  {\LARGE\bfseries {{esc .Personal.Name}}}
+  {{- if .Personal.Headline}}\\[2pt]
+  {\large {{esc .Personal.Headline}}}
+  {{- end}}
+  {{- if $contact}}\\[3pt]
+  {{$contact}}
+  {{- end}}
+\end{center}
+{{- end}}
+
+\vspace{4pt}
+{{- end}}
+
+{{- if .Summary}}
+\section*{Summary}
+{{esc .Summary}}
+{{- end}}
+
+{{- if .Experiences}}
+\section*{Experience}
+{{- range .Experiences}}
+
+\noindent\textbf{ {{- esc .Title -}} } \hfill {{dateRange .StartDate .EndDate .Current}}\\
+\textit{ {{- esc .Company -}} } \hfill {{esc .Location}}
+{{- if .Description}}
+\begin{itemize}
+  {{- range .Description}}
+  \item {{esc .}}
+  {{- end}}
+\end{itemize}
+{{- else}}\\[2pt]
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{- if .Educations}}
+\section*{Education}
+{{- range .Educations}}
+
+\noindent\textbf{ {{- esc .School -}} } \hfill {{dateRange .StartDate .EndDate false}}\\
+\textit{ {{- esc .Degree -}}{{if and .Degree .Field}}, {{end}}{{- esc .Field -}} } \hfill {{esc .GPA}}
+{{- if .Description}}
+\\{{esc .Description}}
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{- if .Skills}}
+\section*{Skills}
+\begin{itemize}
+  {{- range .Skills}}
+  \item \textbf{ {{- esc .Category -}} }: {{escJoin .Items}}
+  {{- end}}
+\end{itemize}
+{{- end}}
+
+{{- if .Projects}}
+\section*{Projects}
+{{- range .Projects}}
+
+\noindent\textbf{ {{- esc .Name -}} } \hfill \textit{ {{- esc .TechStack -}} }
+{{- if .Description}}
+\\{{esc .Description}}
+{{- end}}
+{{- if .Link}}
+\\\href{ {{- .Link -}} }{ {{- esc .Link -}} }
+{{- end}}
+{{- end}}
+{{- end}}
+
+\end{document}

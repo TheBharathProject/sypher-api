@@ -2,6 +2,7 @@ package jobtracker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -35,22 +36,34 @@ type FileInput struct {
 }
 
 // AIReport is the row + JSON shape for the resume report.
+//
+// Format dispatch: a row has EITHER report_md (legacy Markdown) OR
+// report_json (new structured score report). The handler picks based on
+// which field is populated — never both. New writes always go through
+// report_json; report_md is preserved for historical reads only.
 type AIReport struct {
 	ID           uuid.UUID `json:"id"`
 	ResumeFileID *string   `json:"resumeFileId,omitempty"`
-	ReportMD     string    `json:"reportMd"`
-	Score        int       `json:"score"`
-	CreatedAt    string    `json:"createdAt"`
+	DraftID      *string   `json:"draftId,omitempty"`
+	// Format is "json" when report_json is set, "md" when legacy
+	// report_md is set. The FE keys its renderer off this.
+	Format     string          `json:"format"`
+	ReportMD   string          `json:"reportMd,omitempty"`
+	ReportJSON json.RawMessage `json:"reportJson,omitempty"`
+	Score      int             `json:"score"`
+	CreatedAt  string          `json:"createdAt"`
 }
 
 // AIReportSummary is the row + JSON shape for GET /ai/resume/reports.
-// Drops the markdown body so list responses stay small; FE re-fetches per id.
+// Drops the body so list responses stay small; FE re-fetches per id.
 // ResumeFilename is joined from job_tracker.files and is nullable because
 // the FK is ON DELETE SET NULL (resume can be deleted after generating a report).
 type AIReportSummary struct {
 	ID             uuid.UUID `json:"id"`
 	ResumeFileID   *string   `json:"resumeFileId,omitempty"`
 	ResumeFilename *string   `json:"resumeFilename,omitempty"`
+	DraftID        *string   `json:"draftId,omitempty"`
+	Format         string    `json:"format"`
 	Score          int       `json:"score"`
 	CreatedAt      string    `json:"createdAt"`
 }
@@ -200,7 +213,9 @@ func (s *Store) DeleteFile(ctx context.Context, userID, id uuid.UUID) (string, e
 	return key, nil
 }
 
-// SaveReport persists an AI resume report for later retrieval.
+// SaveReport persists a legacy Markdown AI resume report. Kept for
+// back-compat with any caller still on the markdown path — new code
+// should use SaveScoreReport.
 func (s *Store) SaveReport(ctx context.Context, userID uuid.UUID, fileID *uuid.UUID, reportMD string, score int) (*AIReport, error) {
 	const q = `
 		INSERT INTO job_tracker.ai_reports (user_id, resume_file_id, report_md, score)
@@ -219,6 +234,71 @@ func (s *Store) SaveReport(ctx context.Context, userID uuid.UUID, fileID *uuid.U
 		s := fileRef.String()
 		r.ResumeFileID = &s
 	}
+	r.Format = "md"
+	return &r, nil
+}
+
+// CreatePendingScoreReport inserts an "empty" report row reserved for a
+// score generation that's still running in a background goroutine.
+// Both report_md and report_json stay NULL — that absence is how the
+// FE / GetReport detect pending state.
+//
+// Returns the new row's id so the handler can return it immediately
+// (202 Accepted) and the FE can poll for completion.
+func (s *Store) CreatePendingScoreReport(ctx context.Context, userID uuid.UUID, fileID, draftID *uuid.UUID) (uuid.UUID, error) {
+	const q = `
+		INSERT INTO job_tracker.ai_reports (user_id, resume_file_id, draft_id, score)
+		VALUES ($1, $2, $3, 0)
+		RETURNING id
+	`
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, q, userID, fileID, draftID).Scan(&id); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// UpdateScoreReport fills in the JSON body + final score on a row that
+// was previously inserted via CreatePendingScoreReport. Idempotent if
+// called twice (last write wins) — but the handler only calls it once
+// per goroutine.
+func (s *Store) UpdateScoreReport(ctx context.Context, userID, id uuid.UUID, reportJSON []byte, score int) error {
+	const q = `
+		UPDATE job_tracker.ai_reports
+		SET report_json = $3, score = $4
+		WHERE id = $1 AND user_id = $2
+	`
+	_, err := s.pool.Exec(ctx, q, id, userID, reportJSON, score)
+	return err
+}
+
+// SaveScoreReport persists a structured (JSON) resume score report.
+// Either fileID or draftID may be non-nil (or both, e.g. when a
+// builder-sourced report also happened to write a Vault PDF). Both
+// can also be nil when the user pasted raw text.
+func (s *Store) SaveScoreReport(ctx context.Context, userID uuid.UUID, fileID, draftID *uuid.UUID, reportJSON []byte, score int) (*AIReport, error) {
+	const q = `
+		INSERT INTO job_tracker.ai_reports (user_id, resume_file_id, draft_id, report_json, score)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, resume_file_id, draft_id, report_json, COALESCE(score, 0),
+		          to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+	`
+	var r AIReport
+	var fileRef, draftRef *uuid.UUID
+	err := s.pool.QueryRow(ctx, q, userID, fileID, draftID, reportJSON, score).
+		Scan(&r.ID, &fileRef, &draftRef, &r.ReportJSON, &r.Score, &r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if fileRef != nil {
+		v := fileRef.String()
+		r.ResumeFileID = &v
+	}
+	if draftRef != nil {
+		v := draftRef.String()
+		r.DraftID = &v
+	}
+	r.Format = "json"
 	return &r, nil
 }
 
@@ -245,49 +325,67 @@ func (s *Store) ResumeUsage(ctx context.Context, userID, resumeID uuid.UUID) (in
 	return n, nil
 }
 
+// scanAIReportRow reads both legacy (report_md) and new (report_json)
+// columns and sets Format = "json" | "md" so the handler knows which
+// body to surface. Used by LatestReport + GetReport.
+func scanAIReportRow(row pgx.Row) (*AIReport, error) {
+	var (
+		r          AIReport
+		fileRef    *uuid.UUID
+		draftRef   *uuid.UUID
+		reportMD   *string
+		reportJSON []byte
+	)
+	if err := row.Scan(
+		&r.ID, &fileRef, &draftRef, &reportMD, &reportJSON, &r.Score, &r.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if fileRef != nil {
+		v := fileRef.String()
+		r.ResumeFileID = &v
+	}
+	if draftRef != nil {
+		v := draftRef.String()
+		r.DraftID = &v
+	}
+	switch {
+	case len(reportJSON) > 0:
+		r.ReportJSON = json.RawMessage(reportJSON)
+		r.Format = "json"
+	case reportMD != nil:
+		r.ReportMD = *reportMD
+		r.Format = "md"
+	default:
+		// Both columns null = pending async generation. FE polls this
+		// id every 10s until format flips to "json".
+		r.Format = "pending"
+	}
+	return &r, nil
+}
+
 // LatestReport returns the most recent report for the user, or pgx.ErrNoRows.
 func (s *Store) LatestReport(ctx context.Context, userID uuid.UUID) (*AIReport, error) {
 	const q = `
-		SELECT id, resume_file_id, report_md, COALESCE(score, 0),
+		SELECT id, resume_file_id, draft_id, report_md, report_json, COALESCE(score, 0),
 		       to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 		FROM job_tracker.ai_reports
 		WHERE user_id = $1
 		ORDER BY created_at DESC
 		LIMIT 1
 	`
-	var r AIReport
-	var fileRef *uuid.UUID
-	err := s.pool.QueryRow(ctx, q, userID).Scan(&r.ID, &fileRef, &r.ReportMD, &r.Score, &r.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	if fileRef != nil {
-		fid := fileRef.String()
-		r.ResumeFileID = &fid
-	}
-	return &r, nil
+	return scanAIReportRow(s.pool.QueryRow(ctx, q, userID))
 }
 
 // GetReport returns one report by id if the user owns it, else pgx.ErrNoRows.
-// Used by the Activity panel drill-in.
 func (s *Store) GetReport(ctx context.Context, userID, id uuid.UUID) (*AIReport, error) {
 	const q = `
-		SELECT id, resume_file_id, report_md, COALESCE(score, 0),
+		SELECT id, resume_file_id, draft_id, report_md, report_json, COALESCE(score, 0),
 		       to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 		FROM job_tracker.ai_reports
 		WHERE id = $1 AND user_id = $2
 	`
-	var r AIReport
-	var fileRef *uuid.UUID
-	err := s.pool.QueryRow(ctx, q, id, userID).Scan(&r.ID, &fileRef, &r.ReportMD, &r.Score, &r.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	if fileRef != nil {
-		fid := fileRef.String()
-		r.ResumeFileID = &fid
-	}
-	return &r, nil
+	return scanAIReportRow(s.pool.QueryRow(ctx, q, id, userID))
 }
 
 // ListAIReports returns one page of summary rows for the user, newest first.
@@ -307,7 +405,13 @@ func (s *Store) ListAIReports(ctx context.Context, userID uuid.UUID, opts ListAI
 
 	args := []any{userID, limit}
 	q := `
-		SELECT r.id, r.resume_file_id, f.file_name, COALESCE(r.score, 0),
+		SELECT r.id, r.resume_file_id, r.draft_id, f.file_name,
+		       COALESCE(r.score, 0),
+		       CASE
+		         WHEN r.report_json IS NOT NULL THEN 'json'
+		         WHEN r.report_md IS NOT NULL THEN 'md'
+		         ELSE 'pending'
+		       END,
 		       to_char(r.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 		       r.created_at
 		FROM job_tracker.ai_reports r
@@ -330,17 +434,22 @@ func (s *Store) ListAIReports(ctx context.Context, userID uuid.UUID, opts ListAI
 	var lastTS time.Time
 	for rows.Next() {
 		var (
-			row     AIReportSummary
-			fileRef *uuid.UUID
-			fname   *string
-			ts      time.Time
+			row      AIReportSummary
+			fileRef  *uuid.UUID
+			draftRef *uuid.UUID
+			fname    *string
+			ts       time.Time
 		)
-		if err := rows.Scan(&row.ID, &fileRef, &fname, &row.Score, &row.CreatedAt, &ts); err != nil {
+		if err := rows.Scan(&row.ID, &fileRef, &draftRef, &fname, &row.Score, &row.Format, &row.CreatedAt, &ts); err != nil {
 			return nil, time.Time{}, err
 		}
 		if fileRef != nil {
-			s := fileRef.String()
-			row.ResumeFileID = &s
+			v := fileRef.String()
+			row.ResumeFileID = &v
+		}
+		if draftRef != nil {
+			v := draftRef.String()
+			row.DraftID = &v
 		}
 		row.ResumeFilename = fname
 		out = append(out, row)

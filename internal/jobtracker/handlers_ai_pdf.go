@@ -1,6 +1,7 @@
 package jobtracker
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"github.com/go-pdf/fpdf"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/TheBharathProject/sypher-api/internal/ai"
 	"github.com/TheBharathProject/sypher-api/internal/auth"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 )
@@ -339,4 +342,76 @@ func (h *Handler) LatestResumeReportPDF(w http.ResponseWriter, r *http.Request) 
 	}
 	filename := sanitizeFilename(fmt.Sprintf("resume-report-%s.pdf", dateStr))
 	streamPDF(w, pdf, filename)
+}
+
+// ----------------------------------------------------------------------------
+// Handler: ScoreReportPDF
+// GET /job-tracker/ai/resume/reports/{id}/pdf
+//
+// PDF download for structured Resume Score reports (format = "json").
+// Renders the LaTeX template at templates/ai_report/score_report.tex.tmpl
+// and compiles via the sypher-tex sidecar. No credits debited — the
+// AI generation was already paid for at /ai/resume/report time.
+// Legacy markdown reports (format = "md") still route through the
+// /report/latest/pdf path; here we return 400 if asked for one by id.
+// ----------------------------------------------------------------------------
+func (h *Handler) ScoreReportPDF(w http.ResponseWriter, r *http.Request) {
+	uid := auth.MustUserID(r.Context())
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "invalid report id")
+		return
+	}
+
+	rep, err := h.store.GetReport(r.Context(), uid, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "report not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+
+	if rep.Format != "json" || len(rep.ReportJSON) == 0 {
+		// Legacy Markdown reports go through the existing /latest/pdf
+		// path which renders with fpdf. Refuse here so the FE doesn't
+		// silently get an empty/garbled PDF.
+		httpx.WriteError(w, http.StatusBadRequest, "legacy_format",
+			"this report is in legacy markdown format; use /report/latest/pdf instead")
+		return
+	}
+
+	var score ai.ScoreReport
+	if err := json.Unmarshal(rep.ReportJSON, &score); err != nil {
+		h.logger.Error("decode score report", "err", err, "report_id", id)
+		httpx.WriteError(w, http.StatusInternalServerError, "decode_failed", err.Error())
+		return
+	}
+
+	pdfBytes, err := RenderScoreReportPDF(r.Context(), h.latexServiceURL, &score)
+	if err != nil {
+		if errors.Is(err, errLatexServiceUnavailable) {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "latex_service_unavailable",
+				"PDF compilation service is offline or not configured")
+			return
+		}
+		h.logger.Error("compile score report pdf", "err", err, "report_id", id)
+		httpx.WriteError(w, http.StatusBadGateway, "compile_failed", err.Error())
+		return
+	}
+
+	dateStr := time.Now().Format("2006-01-02")
+	if rep.CreatedAt != "" {
+		if t, parseErr := time.Parse(`2006-01-02T15:04:05Z`, rep.CreatedAt); parseErr == nil {
+			dateStr = t.Format("2006-01-02")
+		}
+	}
+	filename := sanitizeFilename(fmt.Sprintf("resume-score-%s.pdf", dateStr))
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	if _, err := w.Write(pdfBytes); err != nil {
+		slog.Error("write score report pdf", "err", err)
+	}
 }

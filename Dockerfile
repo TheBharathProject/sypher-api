@@ -22,6 +22,13 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/api        ./cmd/api        && \
     go build -trimpath -ldflags="-s -w" -o /out/migrate    ./cmd/migrate    && \
     go build -trimpath -ldflags="-s -w" -o /out/cron-once  ./cmd/cron-once
 
+# Note: Resume Builder PDF compilation used to ship a Tectonic binary in
+# this image. It's been moved to a sidecar container (yotech/latex-on-http)
+# managed independently on the VM — keeps this image small and supports
+# arbitrary user-imported LaTeX that Tectonic's bundle couldn't handle.
+# See LATEX_SERVICE_URL config + the plan in
+# ~/.claude/plans/abundant-mixing-whisper.md.
+
 # ─── stage 2: runtime ──────────────────────────────────────────────
 FROM alpine:3.20
 

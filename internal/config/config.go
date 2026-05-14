@@ -39,6 +39,10 @@ type Config struct {
 	JWTAudience             string
 	JWTTTL                  time.Duration
 	FrontendLoginRedirect   string
+	// Per-tool redirect overrides. If set, the OAuth callback sends users
+	// of that tool to the tool-specific URL instead of FrontendLoginRedirect.
+	// Optional — falls back to FrontendLoginRedirect when blank.
+	KairosFrontendLoginRedirect string
 
 	// Public profile URL prefix the API uses when echoing /u/<slug> URLs back
 	// to clients (Settings, Open Graph, etc.). Split out from
@@ -91,6 +95,15 @@ type Config struct {
 	// also fans out a short message to this webhook so we see ideas /
 	// bug reports in real time without polling the DB.
 	SlackFeedbackWebhookURL string
+
+	// LaTeX compile service (used by internal/jobtracker/resume_builder_render).
+	// Points at a sidecar container running yotech/latex-on-http (or
+	// compatible) — Resume Builder PDF exports POST .tex to this URL and
+	// receive PDF bytes back. Optional: when blank, render endpoints
+	// respond 503 latex_service_unavailable and the FE falls back to
+	// showing the raw .tex source. Set to "http://sypher-tex" in prod
+	// (Docker network alias) or "http://localhost:8090" in dev.
+	LatexServiceURL string
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -142,7 +155,8 @@ func Load() (*Config, error) {
 		JWTIssuer:               envWithDefault("JWT_ISSUER", "sypher.in"),
 		JWTAudience:             envWithDefault("JWT_AUDIENCE", "sypher.in"),
 		JWTTTL:                  jwtTTL,
-		FrontendLoginRedirect:   required("FRONTEND_LOGIN_REDIRECT_URL"),
+		FrontendLoginRedirect:        required("FRONTEND_LOGIN_REDIRECT_URL"),
+		KairosFrontendLoginRedirect: os.Getenv("KAIROS_FRONTEND_LOGIN_REDIRECT_URL"),
 		// Default deliberately empty — handlers fall back to derive-from-
 		// FrontendLoginRedirect so existing dev setups keep working without
 		// touching .env. Set explicitly in prod to "https://sypher.in/u/".
@@ -172,6 +186,10 @@ func Load() (*Config, error) {
 		RazorpayPlanIDPlus:    os.Getenv("RAZORPAY_PLAN_ID_PLUS"),
 
 		SlackFeedbackWebhookURL: os.Getenv("SLACK_FEEDBACK_WEBHOOK_URL"),
+
+		// Sidecar URL for the LaTeX compile service. Empty = Resume
+		// Builder PDF endpoints return 503; FE falls back to .tex view.
+		LatexServiceURL: os.Getenv("LATEX_SERVICE_URL"),
 	}
 
 	if len(missing) > 0 {
