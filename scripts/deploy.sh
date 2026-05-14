@@ -46,13 +46,30 @@
 #                                            sidecar. Without this, Resume
 #                                            Builder PDF exports return 503
 #                                            and the FE falls back to .tex.
-#                                            One-time setup on the VM:
-#                                              docker pull yotech/latex-on-http
+#                                            The sidecar is a hand-rolled
+#                                            image (NOT a Docker Hub pull) —
+#                                            source lives at ~/sypher-tex on
+#                                            the developer machine. The
+#                                            HTTP contract mirrors YtoTech's
+#                                            latex-on-http but the image
+#                                            itself is built from
+#                                            ~/sypher-tex/Dockerfile +
+#                                            server.py. See
+#                                            docs/sypher-tex.md for the
+#                                            full runbook. One-time on VM:
+#                                              # scp ~/sypher-tex/{Dockerfile,server.py} to VM first
+#                                              cd ~/sypher-tex
+#                                              docker build -t sypher-tex:latest .
 #                                              docker run -d --name sypher-tex \
 #                                                --network sypher-net \
 #                                                --restart unless-stopped \
-#                                                yotech/latex-on-http
-#                                            Then set LATEX_SERVICE_URL=http://sypher-tex.
+#                                                sypher-tex:latest
+#                                            Then set LATEX_SERVICE_URL=http://sypher-tex:8080
+#                                            (port 8080 — that's what
+#                                            server.py binds to; a bare
+#                                            http://sypher-tex tries port
+#                                            80 and gets connection
+#                                            refused).
 #       Optional with sane defaults (override only if you know why):
 #         JWT_ISSUER (default sypher.in), JWT_AUDIENCE (default sypher.in), JWT_TTL (default 168h)
 #         CORS_ORIGINS (default includes https://sypher.in, www.sypher.in, http://localhost:3000)

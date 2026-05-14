@@ -130,7 +130,7 @@ docker run -d \
   sypher-tex:latest
 
 # 4. Tell sypher-api where to find it
-echo 'LATEX_SERVICE_URL=http://sypher-tex' >> ~/.pg-secret
+echo 'LATEX_SERVICE_URL=http://sypher-tex:8080' >> ~/.pg-secret
 
 # 5. Roll sypher-api so it picks up the env var
 bash ~/sypher-api/scripts/deploy.sh
@@ -275,7 +275,7 @@ Key constants:
 - `ALLOWED_COMPILERS = {"xelatex", "pdflatex", "lualatex"}` — only
   these three are accepted; arbitrary binaries are rejected
 - Port `8080` inside container, published as host `8090` in local dev,
-  reached as `http://sypher-tex` on `sypher-net` in prod
+  reached as `http://sypher-tex:8080` on `sypher-net` in prod
 
 ---
 
