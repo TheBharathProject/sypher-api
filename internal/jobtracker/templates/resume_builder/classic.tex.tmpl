@@ -14,8 +14,19 @@
 \definecolor{accent}{HTML}{ {{- accentHex .Style.AccentColor -}} }
 \hypersetup{colorlinks=true,urlcolor=accent}
 
-{{- if eq .Style.FontFamily "sans"}}
+{{- if or (eq .Style.FontFamily "helvetica") (eq .Style.FontFamily "sans")}}
+\usepackage{helvet}
 \renewcommand{\familydefault}{\sfdefault}
+{{- else if eq .Style.FontFamily "times"}}
+\usepackage{mathptmx}
+{{- else if eq .Style.FontFamily "palatino"}}
+\usepackage{mathpazo}
+{{- else if eq .Style.FontFamily "charter"}}
+\usepackage{charter}
+{{- else if eq .Style.FontFamily "ebgaramond"}}
+\usepackage{ebgaramond}
+{{- else}}
+\usepackage{lmodern}
 {{- end}}
 
 % Section header — divider style is one of: solid | dashed | none. The

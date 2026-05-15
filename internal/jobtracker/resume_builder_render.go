@@ -67,6 +67,24 @@ func mustParseResumeBuilderTemplate(src string) *template.Template {
 	return t
 }
 
+// normalizeStyleFontFamily maps an FE-supplied font id to a known value
+// the template branches on. Legacy "serif" / "sans" become the matching
+// new IDs; anything unknown falls through to the empty string, which
+// the template treats as the default (Latin Modern Roman). Mirrors
+// job-tracker/lib/resume-builder/font-registry.ts:normalizeFontFamily.
+func normalizeStyleFontFamily(s string) string {
+	switch strings.TrimSpace(s) {
+	case "sans":
+		return "helvetica"
+	case "serif", "":
+		return "lmodern"
+	case "lmodern", "helvetica", "times", "palatino", "charter", "ebgaramond":
+		return s
+	default:
+		return "lmodern"
+	}
+}
+
 // accentHex normalises the FE-supplied colour to the bare 6-char hex
 // xcolor's \definecolor expects. Accepts "#1a1a1a" / "1a1a1a" / empty
 // (falls back to dark grey). Anything else is rejected back to the
@@ -110,6 +128,10 @@ func RenderResumeBuilderTeX(content DraftContent, templateID string) (string, er
 	if !ok {
 		return "", fmt.Errorf("unknown template %q", templateID)
 	}
+	// Normalize the font choice so the template only sees known IDs.
+	// Legacy "serif"/"sans" drafts and anything malformed map to a
+	// known package; the template's else-branch handles the default.
+	content.Style.FontFamily = normalizeStyleFontFamily(content.Style.FontFamily)
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, content); err != nil {
 		return "", fmt.Errorf("render template: %w", err)

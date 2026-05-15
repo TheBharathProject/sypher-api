@@ -19,8 +19,23 @@
 \definecolor{accent}{HTML}{ {{- accentHex .Style.AccentColor -}} }
 \hypersetup{colorlinks=true,urlcolor=accent}
 
-{{- if eq .Style.FontFamily "sans"}}
+{{- /* Font family — paired with the FE's font-registry. Each branch
+       loads the standard TeX Live package whose family roughly matches
+       what the HTML preview's web stack will render. Legacy "serif"
+       and "sans" values map to lmodern / helvetica respectively. */ -}}
+{{- if or (eq .Style.FontFamily "helvetica") (eq .Style.FontFamily "sans")}}
+\usepackage{helvet}
 \renewcommand{\familydefault}{\sfdefault}
+{{- else if eq .Style.FontFamily "times"}}
+\usepackage{mathptmx}
+{{- else if eq .Style.FontFamily "palatino"}}
+\usepackage{mathpazo}
+{{- else if eq .Style.FontFamily "charter"}}
+\usepackage{charter}
+{{- else if eq .Style.FontFamily "ebgaramond"}}
+\usepackage{ebgaramond}
+{{- else}}
+\usepackage{lmodern}
 {{- end}}
 
 \titleformat{\section}{\Large\bfseries\raggedright}{}{0pt}{}[
