@@ -132,6 +132,13 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler, requireUser func(http.Handle
 	g("POST", "/job-tracker/resume-builder/drafts/{id}/render/tex", h.RenderResumeBuilderTex)
 	g("POST", "/job-tracker/resume-builder/drafts/{id}/render/pdf", h.RenderResumeBuilderPDF)
 	g("POST", "/job-tracker/resume-builder/drafts/{id}/save-to-vault", h.SaveResumeBuilderToVault)
+	// AI parse — convert an uploaded resume (PDF) or pasted text into
+	// structured DraftContent for prefilling a NEW draft. Returns
+	// {content, title}; the FE follows up with the existing create-
+	// draft POST. Costs CostResumeParse credits once the free monthly
+	// quota is exhausted. Schema: same DraftContent shape stored on
+	// resume_builder_drafts.content.
+	g("POST", "/job-tracker/resume-builder/parse", h.ParseResumeForBuilder)
 
 	// Resume tweaks — versioned AI rewrites. POST charges 20 credits
 	// once the 25k-token free monthly quota is exhausted. List/get/patch/

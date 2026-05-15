@@ -27,6 +27,12 @@ const (
 	// CostCoverLetter — generates a tailored cover letter for a given
 	// job description + resume.
 	CostCoverLetter = 10
+
+	// CostResumeParse — converts a candidate's existing resume (PDF
+	// text or pasted text) into structured DraftContent for the Resume
+	// Builder. Cheaper than ResumeReport because the prompt is a
+	// straight structural extraction, not an analytical review.
+	CostResumeParse = 10
 )
 
 // AICostReason is the canonical identifier for each spend reason. Using
@@ -36,4 +42,5 @@ const (
 	ReasonResumeReport = "ai_resume_report"
 	ReasonResumeTweak  = "ai_resume_tweak"
 	ReasonCoverLetter  = "ai_cover_letter"
+	ReasonResumeParse  = "ai_resume_parse"
 )
