@@ -1,0 +1,206 @@
+{{- /*
+  jakes-resume template. Based on Jake Gutierrez's popular Overleaf CV
+  (https://www.overleaf.com/latex/templates/jakes-resume/syzfjbzwjncs).
+
+  The FE parser at
+  job-tracker/lib/resume-builder/templates/jakes-resume.ts anchors on the
+  custom \resumeSubheading / \resumeProjectHeading / \resumeItem macros
+  emitted here. Any change to those macro signatures requires a
+  coordinated edit to the parser.
+
+  Use Go-template comments only; LaTeX %-comments would ship in the
+  rendered .tex the user sees in LaTeX mode.
+*/ -}}
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{arydshln}
+
+\definecolor{accent}{HTML}{ {{- accentHex .Style.AccentColor -}} }
+\hypersetup{colorlinks=true,urlcolor=accent}
+
+{{- /* Font family — paired with the FE's font-registry. Each branch
+       loads the standard TeX Live package whose family roughly matches
+       what the HTML preview's web stack will render. */ -}}
+{{- if or (eq .Style.FontFamily "helvetica") (eq .Style.FontFamily "sans")}}
+\usepackage{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+{{- else if eq .Style.FontFamily "times"}}
+\usepackage{mathptmx}
+{{- else if eq .Style.FontFamily "palatino"}}
+\usepackage{mathpazo}
+{{- else if eq .Style.FontFamily "charter"}}
+\usepackage{charter}
+{{- else if eq .Style.FontFamily "ebgaramond"}}
+\usepackage{ebgaramond}
+{{- else}}
+\usepackage{lmodern}
+{{- end}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[
+  {{- if eq .Style.SectionDivider "solid" -}}
+    {\color{accent}\titlerule}\vspace{-5pt}
+  {{- else if eq .Style.SectionDivider "dashed" -}}
+    {\color{accent}\hdashrule[0.5ex]{\linewidth}{0.4pt}{2pt}}\vspace{-5pt}
+  {{- end -}}
+]
+
+\pdfgentounicode=1
+
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+\begin{document}
+
+{{- /* Header is gated on Name — empty header produces a centred whitespace
+       run that breaks Jake's tight vertical rhythm. */ -}}
+{{- $contact := contactLine .Personal -}}
+{{- if .Personal.Name}}
+{{- if eq .Style.HeaderAlignment "left"}}
+\noindent {\Huge\scshape {{esc .Personal.Name}}} \\
+{{- if .Personal.Headline}} \vspace{1pt}
+{\large {{esc .Personal.Headline}}} \\
+{{- end}}
+{{- if $contact}} \vspace{1pt}
+\small {{$contact}}
+{{- end}}
+{{- else}}
+\begin{center}
+    {\Huge \scshape {{esc .Personal.Name}}} \\
+    {{- if .Personal.Headline}} \vspace{1pt}
+    {\large {{esc .Personal.Headline}}} \\
+    {{- end}}
+    {{- if $contact}} \vspace{1pt}
+    \small {{$contact}}
+    {{- end}}
+\end{center}
+{{- end}}
+{{- end}}
+
+{{- if .Summary}}
+
+\section*{Summary}
+{{esc .Summary}}
+{{- end}}
+
+{{- if .Educations}}
+
+\section*{Education}
+  \resumeSubHeadingListStart
+  {{- range .Educations}}
+    \resumeSubheading
+      { {{- esc .School -}} }{ {{- dateRange .StartDate .EndDate false -}} }
+      { {{- esc .Degree -}}{{if and .Degree .Field}}, {{end}}{{- esc .Field -}} }{ {{- if .GPA -}}GPA: {{esc .GPA}}{{- end -}} }
+    {{- if .Description}}
+      \resumeItemListStart
+        \resumeItem{ {{- esc .Description -}} }
+      \resumeItemListEnd
+    {{- end}}
+  {{- end}}
+  \resumeSubHeadingListEnd
+{{- end}}
+
+{{- if .Experiences}}
+
+\section*{Experience}
+  \resumeSubHeadingListStart
+  {{- range .Experiences}}
+    \resumeSubheading
+      { {{- esc .Company -}} }{ {{- dateRange .StartDate .EndDate .Current -}} }
+      { {{- esc .Title -}} }{ {{- esc .Location -}} }
+    {{- if .Description}}
+      \resumeItemListStart
+        {{- range .Description}}
+        \resumeItem{ {{- esc . -}} }
+        {{- end}}
+      \resumeItemListEnd
+    {{- end}}
+  {{- end}}
+  \resumeSubHeadingListEnd
+{{- end}}
+
+{{- if .Projects}}
+
+\section*{Projects}
+  \resumeSubHeadingListStart
+  {{- range .Projects}}
+    \resumeProjectHeading
+      { {{- if .TechStack -}}\textbf{ {{- esc .Name -}} } $|$ \emph{ {{- esc .TechStack -}} }{{- else -}}\textbf{ {{- esc .Name -}} }{{- end -}} }{ {{- if .Link -}}\href{ {{- .Link -}} }{ {{- esc .Link -}} }{{- end -}} }
+    {{- if .Description}}
+      \resumeItemListStart
+        \resumeItem{ {{- esc .Description -}} }
+      \resumeItemListEnd
+    {{- end}}
+  {{- end}}
+  \resumeSubHeadingListEnd
+{{- end}}
+
+{{- if .Skills}}
+
+\section*{Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+    {{- range $i, $g := .Skills}}
+     \textbf{ {{- esc $g.Category -}} }{: {{escJoin $g.Items}}} \\
+    {{- end}}
+    }}
+ \end{itemize}
+{{- end}}
+
+\end{document}

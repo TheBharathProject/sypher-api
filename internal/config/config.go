@@ -104,6 +104,41 @@ type Config struct {
 	// showing the raw .tex source. Set to "http://sypher-tex" in prod
 	// (Docker network alias) or "http://localhost:8090" in dev.
 	LatexServiceURL string
+
+	// Kairos — options research tool (second product). See ADR-0011 for
+	// the provider-abstraction architecture and ADR-0014 for the
+	// storage boundary.
+	//
+	// KairosDataProvider names the active data feed (env:
+	// KAIROS_DATA_PROVIDER). Valid values: "kite" (default), "dhan",
+	// "upstox", "angel", "null". Each provider reads its own
+	// per-provider keys from the env; only the active provider needs
+	// its keys set. Switching is config-only (ADR-0011 D3) — restart
+	// the binary after changing.
+	KairosDataProvider string
+
+	// Kite Connect (₹500/mo). Access token is exchanged from a daily
+	// OAuth request_token and persisted in kairos.provider_tokens; the
+	// env vars below are the long-lived API key + secret only.
+	KairosKiteAPIKey    string
+	KairosKiteAPISecret string
+
+	// Other providers are stubs (ADR-0011 D4). Their env vars are
+	// declared here so a future switch is just "fill these in"; until
+	// then they're inert.
+	KairosDhanAccessToken string
+
+	KairosUpstoxClientID     string
+	KairosUpstoxClientSecret string
+
+	KairosAngelAPIKey      string
+	KairosAngelClientCode  string
+	KairosAngelPassword    string
+	KairosAngelTOTPSecret  string
+
+	// KairosRetentionWeeks bounds how far back the partition-prune cron
+	// keeps option_chains data. Defaults to 156 weeks (~3 years).
+	KairosRetentionWeeks int64
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -139,11 +174,19 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("AI_USAGE_MONTHLY_TOKEN_LIMIT: %w", err)
 	}
 
+	// Kairos partition retention. 156 weeks ≈ 3 years (ADR-0009 D5).
+	kairosRetention, err := parseInt64(envWithDefault("KAIROS_RETENTION_WEEKS", "156"))
+	if err != nil {
+		return nil, fmt.Errorf("KAIROS_RETENTION_WEEKS: %w", err)
+	}
+
 	cfg := &Config{
 		DatabaseURL:     required("DATABASE_URL"),
 		WaitlistAPIKey:  required("WAITLIST_API_KEY"),
 		IPSalt:          envWithDefault("IP_SALT", "change-me-please"),
-		CORSOrigins:     splitCSV(envWithDefault("CORS_ORIGINS", "https://sypher.in,https://www.sypher.in,http://localhost:3000")),
+		// Localhost ports: 3000 = pegasus dev, 3001 = kairos dev. Both
+		// need to talk to api:8000 in dev.
+		CORSOrigins:     splitCSV(envWithDefault("CORS_ORIGINS", "https://sypher.in,https://www.sypher.in,http://localhost:3000,http://localhost:3001")),
 		Env:             envWithDefault("ENV", "prod"),
 		HTTPListenAddr:  envWithDefault("HTTP_LISTEN_ADDR", ":8000"),
 		ShutdownTimeout: shutdown,
@@ -190,6 +233,25 @@ func Load() (*Config, error) {
 		// Sidecar URL for the LaTeX compile service. Empty = Resume
 		// Builder PDF endpoints return 503; FE falls back to .tex view.
 		LatexServiceURL: os.Getenv("LATEX_SERVICE_URL"),
+
+		// Kairos data provider + per-provider keys. Only the active
+		// provider needs its keys set; others stay blank.
+		KairosDataProvider: envWithDefault("KAIROS_DATA_PROVIDER", "kite"),
+
+		KairosKiteAPIKey:    os.Getenv("KAIROS_KITE_API_KEY"),
+		KairosKiteAPISecret: os.Getenv("KAIROS_KITE_API_SECRET"),
+
+		KairosDhanAccessToken: os.Getenv("KAIROS_DHAN_ACCESS_TOKEN"),
+
+		KairosUpstoxClientID:     os.Getenv("KAIROS_UPSTOX_CLIENT_ID"),
+		KairosUpstoxClientSecret: os.Getenv("KAIROS_UPSTOX_CLIENT_SECRET"),
+
+		KairosAngelAPIKey:     os.Getenv("KAIROS_ANGEL_API_KEY"),
+		KairosAngelClientCode: os.Getenv("KAIROS_ANGEL_CLIENT_CODE"),
+		KairosAngelPassword:   os.Getenv("KAIROS_ANGEL_PASSWORD"),
+		KairosAngelTOTPSecret: os.Getenv("KAIROS_ANGEL_TOTP_SECRET"),
+
+		KairosRetentionWeeks: kairosRetention,
 	}
 
 	if len(missing) > 0 {

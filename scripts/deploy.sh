@@ -42,6 +42,24 @@
 #         RAZORPAY_PLAN_ID_PLUS            — plan_xxx for ₹299/mo Premium+ tier
 #                                            (premium + 200 credits/cycle). Optional;
 #                                            empty hides the Premium+ card on /upgrade.
+#         KAIROS_DATA_PROVIDER             — "kite" (default), "dhan",
+#                                            "upstox", "angel", or "null".
+#                                            Picks the active data feed for
+#                                            Kairos options ingestion. ADR-0011.
+#         KAIROS_KITE_API_KEY              — Kite Connect API key (₹500/mo).
+#                                            Without it, kairos endpoints
+#                                            return 503 and the ingest cron
+#                                            logs "provider not configured".
+#         KAIROS_KITE_API_SECRET           — pair to API_KEY, server-only.
+#         KAIROS_RETENTION_WEEKS           — how many weekly partitions of
+#                                            option_chains to keep. Default
+#                                            156 (~3 years). ADR-0009 D5.
+#         KAIROS_FRONTEND_LOGIN_REDIRECT_URL  per-tool OAuth redirect for
+#                                            kairos. Defaults to the global
+#                                            FRONTEND_LOGIN_REDIRECT_URL when
+#                                            empty. Set to
+#                                            "https://sypher.in/kairos/auth/callback"
+#                                            in prod.
 #         LATEX_SERVICE_URL                — base URL of the LaTeX compile
 #                                            sidecar. Without this, Resume
 #                                            Builder PDF exports return 503
@@ -157,6 +175,25 @@ OPTIONAL_VARS=(
   # PDF endpoints return 503. Container is started manually on the VM —
   # see the comment block at the top of this script.
   LATEX_SERVICE_URL
+  # Kairos — options research tool. ADR-0011 picks the active data
+  # provider; without keys, the cron logs "provider not configured" and
+  # /options endpoints fall back to last-stored / 503. The rest of
+  # sypher-api boots regardless.
+  KAIROS_DATA_PROVIDER
+  KAIROS_KITE_API_KEY
+  KAIROS_KITE_API_SECRET
+  KAIROS_RETENTION_WEEKS
+  KAIROS_FRONTEND_LOGIN_REDIRECT_URL
+  # Stubs for future providers. Setting these does nothing yet (the
+  # impls return ErrNotImplemented); forwarded so the swap is one
+  # env-var change when the stubs are filled in.
+  KAIROS_DHAN_ACCESS_TOKEN
+  KAIROS_UPSTOX_CLIENT_ID
+  KAIROS_UPSTOX_CLIENT_SECRET
+  KAIROS_ANGEL_API_KEY
+  KAIROS_ANGEL_CLIENT_CODE
+  KAIROS_ANGEL_PASSWORD
+  KAIROS_ANGEL_TOTP_SECRET
 )
 
 # Warn (don't fail) on missing optionals so a half-configured deploy is loud.
@@ -164,7 +201,8 @@ for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC
          DEEPSEEK_API_KEY RESEND_API_KEY MAIL_FROM_ADDRESS \
          RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET \
          RAZORPAY_PLAN_ID RAZORPAY_PLAN_ID_PLUS \
-         LATEX_SERVICE_URL; do
+         LATEX_SERVICE_URL \
+         KAIROS_KITE_API_KEY KAIROS_KITE_API_SECRET; do
   if [ -z "${!v:-}" ]; then
     echo "??? $v unset — feature(s) depending on it will be degraded" >&2
   fi

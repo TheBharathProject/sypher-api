@@ -42,13 +42,18 @@ var resumeBuilderClassicTmpl string
 //go:embed templates/resume_builder/classic-v2.tex.tmpl
 var resumeBuilderClassicV2Tmpl string
 
+//go:embed templates/resume_builder/jakes-resume.tex.tmpl
+var resumeBuilderJakesTmpl string
+
 // classic-v2 is the parse-friendly variant. The FE template parser at
 // job-tracker/lib/resume-builder/templates/classic-v2.ts depends on the
 // exact macros emitted by this template — see the invariants comment at
-// the top of the .tmpl file before tweaking it.
+// the top of the .tmpl file before tweaking it. Same contract applies to
+// jakes-resume / jakes-resume.ts.
 var resumeBuilderTemplates = map[string]*template.Template{
-	"classic-v1": mustParseResumeBuilderTemplate(resumeBuilderClassicTmpl),
-	"classic-v2": mustParseResumeBuilderTemplate(resumeBuilderClassicV2Tmpl),
+	"classic-v1":    mustParseResumeBuilderTemplate(resumeBuilderClassicTmpl),
+	"classic-v2":    mustParseResumeBuilderTemplate(resumeBuilderClassicV2Tmpl),
+	"jakes-resume":  mustParseResumeBuilderTemplate(resumeBuilderJakesTmpl),
 }
 
 func mustParseResumeBuilderTemplate(src string) *template.Template {

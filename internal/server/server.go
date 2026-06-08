@@ -19,6 +19,8 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/health"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
+	"github.com/TheBharathProject/sypher-api/internal/kairos"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/provider"
 	"github.com/TheBharathProject/sypher-api/internal/mailer"
 	"github.com/TheBharathProject/sypher-api/internal/storage"
 	"github.com/TheBharathProject/sypher-api/internal/waitlist"
@@ -36,6 +38,10 @@ type Server struct {
 	// graceful-shutdown context. nil if no jobs are registered (kept
 	// nullable so future single-tenant builds can opt out).
 	cron *cron.Runner
+	// kairosWorker is the backtest goroutine pool. Started on Start,
+	// stopped on graceful shutdown. nil when kairos isn't wired (e.g.
+	// in tests that only exercise jobtracker).
+	kairosWorker *kairos.Pool
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Server {
@@ -173,31 +179,71 @@ func (s *Server) routes() http.Handler {
 		s.logger.Info("razorpay skipped", "reason", "RAZORPAY_KEY_ID or _SECRET unset")
 	}
 
+	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
+
+	// ─────────────────────────────────────────────────────────────────
+	// Kairos — options research + backtester. ADR-0011 picks the active
+	// BrokerProvider from KAIROS_DATA_PROVIDER and wires storage, async
+	// worker, and routes around the interface.
+	//
+	// If provider construction fails (typo'd KAIROS_DATA_PROVIDER, e.g.),
+	// boot continues — the kairos endpoints just respond 503 and the
+	// rest of sypher-api (auth, jobtracker, billing) stays up.
+	// ─────────────────────────────────────────────────────────────────
+	kairosStore := kairos.NewStore(s.pool)
+	var kairosProvider provider.BrokerProvider
+	if p, kerr := provider.NewProvider(s.cfg, s.pool, s.logger); kerr != nil {
+		s.logger.Error("kairos provider init failed; kairos endpoints will return 503", "err", kerr)
+	} else {
+		kairosProvider = p
+		s.kairosWorker = kairos.NewPool(kairosStore, kairosProvider, s.logger)
+		kairosHandler := kairos.NewHandler(s.cfg, kairosStore, kairosProvider, s.kairosWorker, s.logger)
+		kairos.RegisterRoutes(mux, kairosHandler, requireUser)
+	}
+
 	urls := jobs.NewURLBuilder(s.cfg)
-	s.cron = cron.New(s.logger,
-		cron.Job{
+	cronJobs := []cron.Job{
+		{
 			Name:     "stale-apps",
 			NextFire: jobs.AtIST(3, 0),
 			Run:      jobs.MarkStaleApplications(jtStore, notifier, urls, s.logger),
 		},
-		cron.Job{
+		{
 			Name:     "daily-digest",
 			NextFire: jobs.AtIST(9, 0),
 			Run:      jobs.DailyApplicationDigest(jtStore, notifier, mailerClient, urls, s.logger),
 		},
-		cron.Job{
+		{
 			Name:     "expire-one-time-premium",
 			NextFire: jobs.AtIST(4, 0),
 			Run:      jobs.ExpireOneTimePremium(billingStore, s.logger),
 		},
-		cron.Job{
+		{
 			Name:     "fire-reminders",
 			NextFire: jobs.EveryN(5 * time.Minute),
 			Run:      jobs.FireDueReminders(jtStore, notifier, s.logger),
 		},
-	)
-
-	jobtracker.RegisterRoutes(mux, jtHandler, requireUser)
+	}
+	if kairosProvider != nil {
+		cronJobs = append(cronJobs,
+			cron.Job{
+				Name:     "kairos-options-snapshot",
+				NextFire: jobs.EveryN(60 * time.Second),
+				Run:      jobs.KairosOptionsSnapshot(kairosStore, kairosProvider, s.logger),
+			},
+			cron.Job{
+				Name:     "kairos-create-partitions",
+				NextFire: jobs.AtIST(2, 30),
+				Run:      jobs.KairosCreatePartitions(kairosStore, s.logger),
+			},
+			cron.Job{
+				Name:     "kairos-backtest-sweep",
+				NextFire: jobs.EveryN(60 * time.Second),
+				Run:      jobs.KairosBacktestSweep(kairosStore, s.kairosWorker.Enqueue, s.logger),
+			},
+		)
+	}
+	s.cron = cron.New(s.logger, cronJobs...)
 
 	// Billing routes — auth-gated (premium is per-user) except the
 	// webhook which is signed with HMAC.
@@ -249,6 +295,12 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cron != nil {
 		s.cron.Start(ctx)
 	}
+	// Kairos backtest worker pool — same ctx so it stops on SIGTERM. The
+	// pool's startup sweep re-enqueues any rows stuck pending from the
+	// previous process (ADR-0010 D5).
+	if s.kairosWorker != nil {
+		s.kairosWorker.Start(ctx)
+	}
 
 	go func() {
 		s.logger.Info("http server starting", "addr", s.cfg.HTTPListenAddr, "env", s.cfg.Env)
@@ -271,6 +323,11 @@ func (s *Server) Start(ctx context.Context) error {
 		// normal load. If a job is mid-run, we wait it out.
 		if s.cron != nil {
 			s.cron.Wait()
+		}
+		// Backtest workers also stop with the ctx; Stop is idempotent
+		// and closes the channel so they unblock from <-p.ch cleanly.
+		if s.kairosWorker != nil {
+			s.kairosWorker.Stop()
 		}
 		return nil
 	case err := <-errCh:
