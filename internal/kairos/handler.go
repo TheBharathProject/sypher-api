@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +18,8 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/auth"
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/greeks"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/marketdata"
 	"github.com/TheBharathProject/sypher-api/internal/kairos/provider"
 	"github.com/TheBharathProject/sypher-api/internal/kairos/provider/kite"
 )
@@ -31,10 +35,24 @@ type Handler struct {
 	provider provider.BrokerProvider
 	worker   *Pool
 	logger   *slog.Logger
+	// authStore is optional (jobtracker With* idiom). It powers the
+	// premium check in SubmitBacktest (nil → everyone gets free-tier
+	// limits, fail-closed) and the admin user endpoints (nil → 503).
+	authStore *auth.Store
+	// marketData is optional (same idiom; set via WithMarketData in
+	// handlers_screener.go). It powers the screener's best-effort
+	// live-price merge — nil just means pricesLive=false.
+	marketData *marketdata.Service
 }
 
 func NewHandler(cfg *config.Config, store *Store, prov provider.BrokerProvider, worker *Pool, logger *slog.Logger) *Handler {
 	return &Handler{cfg: cfg, store: store, provider: prov, worker: worker, logger: logger}
+}
+
+// WithAuthStore attaches the auth store. Returns the Handler for chaining.
+func (h *Handler) WithAuthStore(as *auth.Store) *Handler {
+	h.authStore = as
+	return h
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -84,9 +102,12 @@ func (h *Handler) GetExpiries(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"expiries": out})
 }
 
-// GetChain returns the most recent stored chain snapshot for an
-// (underlying, expiry). ADR-0013 D2 — the DB is the cache; we don't
-// hit the provider on this path.
+// GetChain returns a stored chain snapshot for an (underlying, expiry),
+// enriched with read-time greeks (ADR-0009 D3). ADR-0013 D2 — the DB is
+// the cache; we don't hit the provider on this path.
+//
+// Without ts= it serves the latest snapshot. With ts= (RFC3339) it's
+// the time machine: the latest snapshot at-or-before ts on ts's date.
 func (h *Handler) GetChain(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	u := provider.Underlying(strings.ToUpper(q.Get("underlying")))
@@ -100,28 +121,43 @@ func (h *Handler) GetChain(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "expiry must be YYYY-MM-DD")
 		return
 	}
-	rows, snapTime, err := h.store.LatestChain(r.Context(), u, expiry)
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+	var (
+		rows     []provider.ChainRow
+		snapTime time.Time
+		tsStr    = q.Get("ts")
+	)
+	if tsStr != "" {
+		ts, perr := time.Parse(time.RFC3339, tsStr)
+		if perr != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_input", "ts must be RFC3339")
+			return
+		}
+		rows, snapTime, err = h.store.ChainAt(r.Context(), u, expiry, ts)
+	} else {
+		rows, snapTime, err = h.store.LatestChain(r.Context(), u, expiry)
 	}
-	// Always serialise rows as [] (not null) — the FE expects an array
-	// to index into. nil slices marshal to "null" by default which
-	// breaks .length checks.
-	if rows == nil {
-		rows = []provider.ChainRow{}
+	if err != nil {
+		h.logger.Error("load chain failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
+		return
 	}
 	resp := ChainResponse{
 		Underlying:   u,
 		Expiry:       expStr,
 		SnapshotTime: snapTime,
-		Rows:         rows,
+		// enrichChain always returns a non-nil slice — the FE expects an
+		// array to index into; a nil slice marshals to "null" and breaks
+		// .length checks.
+		Rows: enrichChain(rows, expiry, snapTime),
 	}
 	if len(rows) > 0 {
 		resp.Spot = rows[0].Spot
 		resp.StalenessSeconds = int64(time.Since(snapTime).Seconds())
-		// Honour If-Modified-Since (ADR-0013 D5).
-		if !snapTime.IsZero() {
+		// Honour If-Modified-Since (ADR-0013 D5) — latest-snapshot path
+		// only. A time-machine response is keyed by ts, not by recency;
+		// matching it against the browser's cached "latest" copy would
+		// 304 the wrong payload.
+		if tsStr == "" && !snapTime.IsZero() {
 			w.Header().Set("Last-Modified", snapTime.UTC().Format(http.TimeFormat))
 			if ims := r.Header.Get("If-Modified-Since"); ims != "" {
 				if t, err := http.ParseTime(ims); err == nil && !snapTime.After(t) {
@@ -132,6 +168,75 @@ func (h *Handler) GetChain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+// ChainTimestamps returns every snapshot time recorded for an underlying
+// on a trading day — the positions of the FE's time-machine scrubber.
+// Each entry is valid as GetChain's ts= param.
+func (h *Handler) ChainTimestamps(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	u := provider.Underlying(strings.ToUpper(q.Get("underlying")))
+	dateStr := q.Get("date")
+	if u == "" || dateStr == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "underlying and date are required")
+		return
+	}
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "date must be YYYY-MM-DD")
+		return
+	}
+	times, err := h.store.SnapshotTimes(r.Context(), u, date)
+	if err != nil {
+		h.logger.Error("load snapshot times failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
+		return
+	}
+	out := make([]string, 0, len(times))
+	for _, t := range times {
+		out = append(out, t.UTC().Format(time.RFC3339))
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"timestamps": out})
+}
+
+// IntradayAnalytics returns the per-snapshot PCR / max-pain / spot
+// series for an (underlying, expiry) on a trading day — the data behind
+// the intraday analytics chart.
+func (h *Handler) IntradayAnalytics(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	u := provider.Underlying(strings.ToUpper(q.Get("underlying")))
+	expStr := q.Get("expiry")
+	dateStr := q.Get("date")
+	if u == "" || expStr == "" || dateStr == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "underlying, expiry and date are required")
+		return
+	}
+	expiry, err := time.Parse("2006-01-02", expStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "expiry must be YYYY-MM-DD")
+		return
+	}
+	date, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "date must be YYYY-MM-DD")
+		return
+	}
+	snaps, err := h.store.DaySnapshots(r.Context(), u, expiry, date)
+	if err != nil {
+		h.logger.Error("load day snapshots failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
+		return
+	}
+	points := make([]IntradayPoint, 0, len(snaps))
+	for _, s := range snaps {
+		points = append(points, IntradayPoint{
+			TS:      s.TS,
+			PCR:     computePCR(s.Rows),
+			MaxPain: computeMaxPain(s.Rows),
+			Spot:    s.Spot,
+		})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"points": points})
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -151,7 +256,8 @@ func (h *Handler) SaveStrategy(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.store.SaveStrategy(r.Context(), uid, &in)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("save strategy failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, out)
@@ -162,7 +268,8 @@ func (h *Handler) ListStrategies(w http.ResponseWriter, r *http.Request) {
 	uid := auth.MustUserID(r.Context())
 	out, err := h.store.ListStrategies(r.Context(), uid)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("list strategies failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	if out == nil {
@@ -184,7 +291,8 @@ func (h *Handler) DeleteStrategy(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "strategy not found")
 			return
 		}
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("delete strategy failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -206,24 +314,81 @@ func (h *Handler) SubmitBacktest(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_input", err.Error())
 		return
 	}
-	// Rate-limit free-tier users to 5 backtests / 24h (ADR-0010 D7).
-	// Premium check is left as a TODO — the auth/billing wiring is in
-	// place but the kairos handler doesn't yet read is_premium. Once
-	// the FE gates Premium features for Kairos, this branches on it.
-	n, err := h.store.CountBacktestsLast24h(r.Context(), uid)
-	if err == nil && n >= 5 {
-		httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited",
-			"free tier is limited to 5 backtests per 24 hours; upgrade for unlimited")
+	if !h.gateBacktest(w, r, uid, &in) {
 		return
 	}
 	id, err := h.store.CreateBacktest(r.Context(), uid, &in, nil)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("create backtest failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	// Non-blocking enqueue. Channel full → next pool sweep picks it up.
 	h.worker.Enqueue(id)
 	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"id": id})
+}
+
+// gateBacktest enforces the server-side premium rules (spec §3.6,
+// ADR-0010 D7) after validateBacktest has confirmed date formats:
+//
+//	everyone: toDate ≤ today, fromDate < toDate
+//	free:     fromDate ≥ today−6 months AND <5 backtests in 24h
+//	premium:  fromDate ≥ today−3 years, unlimited count
+//
+// Returns false with the response already written when the request is
+// rejected. A nil/unreachable authStore fails closed to free-tier
+// limits rather than 500ing the submit path.
+func (h *Handler) gateBacktest(w http.ResponseWriter, r *http.Request, uid uuid.UUID, in *BacktestRequest) bool {
+	// Already format-validated by validateBacktest; errors can't happen.
+	fromDate, _ := time.Parse("2006-01-02", in.FromDate)
+	toDate, _ := time.Parse("2006-01-02", in.ToDate)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	if toDate.After(today) {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "toDate must not be in the future")
+		return false
+	}
+	if !fromDate.Before(toDate) {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_input", "fromDate must be before toDate")
+		return false
+	}
+
+	isPremium := false
+	if h.authStore != nil {
+		u, err := h.authStore.GetUserByID(r.Context(), uid)
+		if err != nil {
+			h.logger.Error("backtest premium lookup failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		} else {
+			isPremium = u.IsPremium
+		}
+	}
+
+	if isPremium {
+		if fromDate.Before(today.AddDate(-3, 0, 0)) {
+			httpx.WriteError(w, http.StatusBadRequest, "bad_input",
+				"backtests are limited to the last 3 years of data")
+			return false
+		}
+		return true
+	}
+	if fromDate.Before(today.AddDate(0, -6, 0)) {
+		httpx.WriteError(w, http.StatusForbidden, "premium_required",
+			"Free accounts can backtest the last 6 months")
+		return false
+	}
+	n, err := h.store.CountBacktestsSince(r.Context(), uid, now.Add(-24*time.Hour))
+	if err != nil {
+		h.logger.Error("backtest rate-limit count failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
+		return false
+	}
+	if n >= 5 {
+		httpx.WriteError(w, http.StatusForbidden, "premium_required",
+			"Free limit: 5 backtests per 24h")
+		return false
+	}
+	return true
 }
 
 // GetBacktest returns the row for polling.
@@ -240,7 +405,8 @@ func (h *Handler) GetBacktest(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "backtest not found")
 			return
 		}
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("load backtest failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, bt)
@@ -257,7 +423,8 @@ func (h *Handler) ListBacktests(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.store.ListBacktests(r.Context(), uid, limit)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("list backtests failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	if out == nil {
@@ -449,6 +616,119 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// enrichChain attaches read-time greeks to stored chain rows
+// (ADR-0009 D3 — greeks are computed here, never persisted).
+//
+// tte = (expiry - snapshotTime) in days/365, floored at half a day so
+// expiry-day rows don't divide by zero. Rows that can't be enriched
+// keep zero greeks rather than failing the whole request: untraded
+// strikes (LTP==0), rows missing a spot, and prices outside
+// no-arbitrage bounds (stale deep-ITM quotes do this routinely).
+//
+// Rounding mirrors chain-data.ts (iv 2dp in percent, delta 3dp,
+// gamma 4dp, theta/vega 2dp) so the FE renders identical numbers.
+// Delta is abs() for PE because the FE shows both sides positive.
+func enrichChain(rows []provider.ChainRow, expiry, snapTime time.Time) []EnrichedChainRow {
+	out := make([]EnrichedChainRow, 0, len(rows))
+	tte := expiry.Sub(snapTime).Hours() / 24 / 365
+	if tte < 0.5/365 {
+		tte = 0.5 / 365
+	}
+	for _, row := range rows {
+		e := EnrichedChainRow{ChainRow: row}
+		if row.LTP > 0 && row.Spot > 0 && row.Strike > 0 {
+			isCall := row.OptionType == provider.OptionTypeCE
+			iv, err := greeks.ImpliedVol(isCall, row.LTP, row.Spot, float64(row.Strike), greeks.RiskFreeRate, tte)
+			if err == nil {
+				g := greeks.Compute(isCall, row.Spot, float64(row.Strike), greeks.RiskFreeRate, iv, tte)
+				delta := g.Delta
+				if !isCall {
+					delta = math.Abs(delta)
+				}
+				e.IV = roundTo(g.IV*100, 2)
+				e.Delta = roundTo(delta, 3)
+				e.Gamma = roundTo(g.Gamma, 4)
+				e.Theta = roundTo(g.Theta, 2)
+				e.Vega = roundTo(g.Vega, 2)
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func roundTo(v float64, places int) float64 {
+	p := math.Pow(10, float64(places))
+	return math.Round(v*p) / p
+}
+
+// computePCR is total PE OI over total CE OI for one snapshot. Returns
+// 0 when there is no CE OI — the API contract's divide-by-zero guard
+// (the FE's computePCR defaults to 1 for display, but the analytics
+// series wants a value that reads as "no data", not "balanced").
+func computePCR(rows []DayChainRow) float64 {
+	var ceOI, peOI int64
+	for _, r := range rows {
+		switch r.OptionType {
+		case provider.OptionTypeCE:
+			ceOI += r.OI
+		case provider.OptionTypePE:
+			peOI += r.OI
+		}
+	}
+	if ceOI == 0 {
+		return 0
+	}
+	return float64(peOI) / float64(ceOI)
+}
+
+// computeMaxPain returns the expiry-settlement strike that minimises
+// option writers' total intrinsic payout. Same semantics as
+// computeMaxPain in kairos/app/options/chain-data.ts: for candidate K,
+// CE writers pay oi*(K-strike) on strikes below K and PE writers pay
+// oi*(strike-K) on strikes above K (strict inequalities); ties go to
+// the lowest strike. Returns 0 for an empty chain.
+func computeMaxPain(rows []DayChainRow) int {
+	ceOI := make(map[int]int64)
+	peOI := make(map[int]int64)
+	seen := make(map[int]bool)
+	for _, r := range rows {
+		seen[r.Strike] = true
+		switch r.OptionType {
+		case provider.OptionTypeCE:
+			ceOI[r.Strike] += r.OI
+		case provider.OptionTypePE:
+			peOI[r.Strike] += r.OI
+		}
+	}
+	if len(seen) == 0 {
+		return 0
+	}
+	strikes := make([]int, 0, len(seen))
+	for k := range seen {
+		strikes = append(strikes, k)
+	}
+	sort.Ints(strikes)
+	best := strikes[0]
+	minLoss := int64(math.MaxInt64)
+	for _, k := range strikes {
+		var loss int64
+		for _, s := range strikes {
+			if s < k {
+				loss += ceOI[s] * int64(k-s)
+			}
+			if s > k {
+				loss += peOI[s] * int64(s-k)
+			}
+		}
+		if loss < minLoss {
+			minLoss = loss
+			best = k
+		}
+	}
+	return best
 }
 
 func lotSize(u provider.Underlying) int {

@@ -89,6 +89,53 @@ type Candle struct {
 	Volume int64     `json:"volume"`
 }
 
+// Quote is a normalised live quote for one instrument, returned by the
+// optional QuoteFetcher capability (capabilities.go). JSON tags are
+// camelCase to match the FE contract exactly: ApiQuote in
+// kairos/lib/kairos-api.ts — {symbol, last, change, changePct, volume,
+// ohlc:{o,h,l,c}, ts}. Handlers marshal this type as-is.
+//
+// Change is in absolute points vs the previous close (ohlc.c);
+// ChangePct in percent (e.g. 0.59 = +0.59%).
+type Quote struct {
+	Symbol    string    `json:"symbol"`
+	Last      float64   `json:"last"`
+	Change    float64   `json:"change"`
+	ChangePct float64   `json:"changePct"`
+	Volume    int64     `json:"volume"`
+	OHLC      OHLC      `json:"ohlc"`
+	TS        time.Time `json:"ts"`
+}
+
+// OHLC is the day's open/high/low/close embedded in a Quote. Single
+// letters because that's the wire shape the FE renders (ApiQuote.ohlc).
+// C is the previous session's close — Kite semantics — which is what
+// Change/ChangePct are computed against.
+type OHLC struct {
+	O float64 `json:"o"`
+	H float64 `json:"h"`
+	L float64 `json:"l"`
+	C float64 `json:"c"`
+}
+
+// Instrument is one searchable instrument, returned by the optional
+// InstrumentSearcher capability (capabilities.go). JSON tags are
+// camelCase to match the FE search contract (ApiSymbolSearchResult in
+// kairos/lib/kairos-api.ts: {symbol, name, exchange, kind}); LotSize
+// and Token are extra fields the search endpoint may also expose.
+//
+// Kind is "EQ" for equities and "INDEX" for indices. Token is the
+// provider-native instrument id as a string (Kite's numeric
+// instrument_token, Dhan's security id, ...).
+type Instrument struct {
+	Symbol   string `json:"symbol"`
+	Name     string `json:"name"`
+	Exchange string `json:"exchange"`
+	Kind     string `json:"kind"`
+	LotSize  int    `json:"lotSize"`
+	Token    string `json:"token"`
+}
+
 // HistoricalReq is the parameter bundle for FetchHistoricalCandles.
 // Interval matches Kite's vocabulary (which Dhan/Upstox/Angel either
 // share or trivially translate to): "minute" | "3minute" | "5minute" |

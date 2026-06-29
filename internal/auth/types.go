@@ -19,6 +19,10 @@ import "github.com/google/uuid"
 // part of the email-gating policy — see docs/adr/0002-premium-email-gating.md.
 // Both default false/true respectively at the schema level so existing rows
 // pre-migration get safe defaults without a backfill.
+//
+// IsAdmin (migration 0026) gates platform-operator endpoints via
+// RequireAdmin. Bootstrapped by manual SQL flip, same as is_premium
+// pre-billing.
 type User struct {
 	ID                        uuid.UUID `json:"id"`
 	GoogleID                  string    `json:"-"`
@@ -27,6 +31,7 @@ type User struct {
 	PictureURL                string    `json:"pictureUrl,omitempty"`
 	Timezone                  string    `json:"timezone"`
 	IsPremium                 bool      `json:"isPremium"`
+	IsAdmin                   bool      `json:"isAdmin"`
 	EmailNotificationsEnabled bool      `json:"emailNotificationsEnabled"`
 }
 

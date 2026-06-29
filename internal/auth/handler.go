@@ -2,11 +2,15 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -230,8 +234,110 @@ func (h *Handler) CurrentUser(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("get current user", "user_id", uid, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, u)
+}
+
+// updateMeRequest is the PATCH /auth/me body. Every field is optional —
+// only the keys present in the JSON are applied (pointer == nil means
+// "not sent", so `false` and "absent" are distinguishable).
+type updateMeRequest struct {
+	Name                      *string `json:"name"`
+	Timezone                  *string `json:"timezone"`
+	EmailNotificationsEnabled *bool   `json:"emailNotificationsEnabled"`
+}
+
+// UpdateMe handles PATCH /auth/me — partial update of the user-editable
+// profile fields (name, timezone, emailNotificationsEnabled). Returns
+// the refreshed user JSON, same shape as GET /auth/me.
+func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	uid := MustUserID(r.Context())
+	var req updateMeRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_name", "name cannot be empty")
+			return
+		}
+		if utf8.RuneCountInString(name) > 120 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_name", "name must be 120 characters or fewer")
+			return
+		}
+		req.Name = &name
+	}
+	if req.Timezone != nil {
+		tz := strings.TrimSpace(*req.Timezone)
+		// Guard the empty string explicitly: time.LoadLocation("")
+		// happily returns UTC, which would store "" in the column.
+		if tz == "" {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_timezone", "timezone cannot be empty")
+			return
+		}
+		if _, err := time.LoadLocation(tz); err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid_timezone", "unknown IANA timezone")
+			return
+		}
+		req.Timezone = &tz
+	}
+	// Premium gate, mirroring jobtracker's UpdateEmailPrefs: enabling email
+	// notifications is a premium perk per docs/adr/0002-premium-email-gating.md
+	// (D2/D4). Disabling stays free — persisting an explicit "no thanks"
+	// prevents surprise emails if the user upgrades later.
+	if req.EmailNotificationsEnabled != nil && *req.EmailNotificationsEnabled {
+		u, err := h.store.GetUserByID(r.Context(), uid)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				httpx.WriteError(w, http.StatusNotFound, "not_found", "user not found")
+				return
+			}
+			h.logger.Error("update me: premium check", "user_id", uid, "err", err)
+			httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+			return
+		}
+		if !u.IsPremium {
+			httpx.WriteError(w, http.StatusPaymentRequired, "premium_required",
+				"Email notifications are a premium feature. Upgrade in Settings.")
+			return
+		}
+	}
+
+	u, err := h.store.UpdateProfile(r.Context(), uid, req.Name, req.Timezone, req.EmailNotificationsEnabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.WriteError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		h.logger.Error("update me", "user_id", uid, "err", err)
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, u)
+}
+
+// readJSON decodes the request body into dst, capping the body at 1 MiB.
+// Returns false (error already written) on failure. Mirrors the
+// jobtracker helper of the same name.
+func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_request", "could not read body")
+		return false
+	}
+	defer r.Body.Close()
+	if len(body) == 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_request", "empty body")
+		return false
+	}
+	if err := json.Unmarshal(body, dst); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_json", "invalid json body")
+		return false
+	}
+	return true
 }

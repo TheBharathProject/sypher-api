@@ -3,6 +3,8 @@ package kairos
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/TheBharathProject/sypher-api/internal/kairos/provider"
 )
@@ -24,7 +26,44 @@ type SnapshotResult struct {
 // Caller is responsible for deciding whether to call this (market-hours
 // check, provider.IsReady, etc.). This function just does the work,
 // every time.
+//
+// Every invocation — cron tick or admin trigger — also records an
+// "options-snapshot" row in kairos.ingest_runs (spec §3.8): total rows
+// written, ok=false plus an error summary in detail when any
+// (underlying, expiry) failed. Recording is best-effort: a failure to
+// write the audit row is logged and never fails the snapshot itself.
 func SnapshotChains(ctx context.Context, store *Store, prov provider.BrokerProvider, logger *slog.Logger) []SnapshotResult {
+	const job = "options-snapshot"
+	startedAt := time.Now().UTC()
+	out := snapshotChains(ctx, store, prov, logger)
+	finishedAt := time.Now().UTC()
+
+	var rowsWritten int64
+	var errs []string
+	for _, r := range out {
+		rowsWritten += r.Rows
+		if r.Err != "" {
+			label := r.Underlying
+			if r.Expiry != "" {
+				label += " " + r.Expiry
+			}
+			errs = append(errs, label+": "+r.Err)
+		}
+	}
+	// Detached context so the audit row still lands when the caller's
+	// ctx was cancelled mid-snapshot (the run did happen; log it).
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if rerr := store.RecordIngestRun(rctx, job, startedAt, finishedAt,
+		len(errs) == 0, int(rowsWritten), strings.Join(errs, "; ")); rerr != nil {
+		logger.Warn("kairos ingest run record failed", "job", job, "err", rerr)
+	}
+	return out
+}
+
+// snapshotChains is the actual fetch+insert pass. Kept separate so the
+// exported wrapper above can bracket it with ingest_runs bookkeeping.
+func snapshotChains(ctx context.Context, store *Store, prov provider.BrokerProvider, logger *slog.Logger) []SnapshotResult {
 	var out []SnapshotResult
 	for _, u := range provider.AllUnderlyings() {
 		exps, err := prov.FetchExpiries(ctx, u)

@@ -139,6 +139,13 @@ type Config struct {
 	// KairosRetentionWeeks bounds how far back the partition-prune cron
 	// keeps option_chains data. Defaults to 156 weeks (~3 years).
 	KairosRetentionWeeks int64
+
+	// KairosLiveTrading is the dark-launch kill switch for real order
+	// execution (env: KAIROS_LIVE_TRADING, default off). While off,
+	// POST /kairos/orders refuses with 403 execution_disabled; paper
+	// trading is unaffected. Accepted truthy values: "1", "true", "on",
+	// "yes" (case-insensitive) — anything else, including unset, is off.
+	KairosLiveTrading bool
 }
 
 // Load reads the environment and returns a Config or an error explaining
@@ -252,6 +259,8 @@ func Load() (*Config, error) {
 		KairosAngelTOTPSecret: os.Getenv("KAIROS_ANGEL_TOTP_SECRET"),
 
 		KairosRetentionWeeks: kairosRetention,
+
+		KairosLiveTrading: envBool("KAIROS_LIVE_TRADING"),
 	}
 
 	if len(missing) > 0 {
@@ -270,6 +279,17 @@ func envWithDefault(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool parses an opt-in boolean env var: "1" / "true" / "on" /
+// "yes" (case-insensitive) → true; everything else (including unset)
+// → false. Used for dark-launch flags that must default off.
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
 }
 
 func splitCSV(s string) []string {

@@ -1,6 +1,7 @@
 package kite
 
 import (
+	"context"
 	"encoding/csv"
 	"errors"
 	"io"
@@ -19,10 +20,13 @@ import (
 //   instrument_token, exchange_token, tradingsymbol, name, last_price,
 //   expiry, strike, tick_size, lot_size, instrument_type, segment, exchange.
 //
-// We only care about index options on NFO + BFO:
-//   - NIFTY  (NFO segment, name="NIFTY")
-//   - BANKNIFTY (NFO segment, name="BANKNIFTY")
-//   - SENSEX (BFO segment, name="SENSEX")
+// We keep two slices of the dump in memory:
+//   - index options on NFO + BFO (the chain/expiry path):
+//       NIFTY (NFO), BANKNIFTY (NFO), SENSEX (BFO)
+//   - searchable cash instruments (the SearchInstruments capability):
+//       NSE equities (exchange=NSE, segment=NSE, instrument_type=EQ)
+//       and indices (segment=INDICES on NSE/BSE — BSE included so
+//       SENSEX is findable)
 
 // instrument is the slimmed-down row we keep in memory. The full CSV
 // has ~80k rows; we discard everything that isn't an index option on a
@@ -38,12 +42,30 @@ type instrument struct {
 	LotSize       int
 }
 
+// searchRow is one searchable cash instrument (NSE equity or index)
+// kept for the SearchInstruments capability. Separate from instrument
+// so the option-chain lookups (Expiries/OptionInstruments) never have
+// to skip over equities.
+//
+// symU/nameU are pre-uppercased copies of TradingSymbol/Name so each
+// search query doesn't re-fold ~2k strings.
+type searchRow struct {
+	Token         int64
+	Exchange      string // "NSE" | "BSE"
+	TradingSymbol string // e.g. "RELIANCE", "NIFTY 50"
+	Name          string // e.g. "RELIANCE INDUSTRIES"
+	Kind          string // "EQ" | "INDEX"
+	LotSize       int
+	symU, nameU   string
+}
+
 // instrumentIndex is the in-memory lookup structure populated from the
 // Kite instruments CSV. Refreshed every 12h (kite.go:ensureInstruments).
 type instrumentIndex struct {
 	all      []instrument
 	byToken  map[int64]instrument
 	bySymbol map[string]int64 // exchange:tradingsymbol → token
+	search   []searchRow      // NSE equities + indices, for SearchInstruments
 }
 
 // parseInstruments reads the Kite CSV from r and returns the filtered
@@ -66,7 +88,7 @@ func parseInstruments(r io.Reader) (instrumentIndex, error) {
 	for i, c := range header {
 		col[strings.TrimSpace(c)] = i
 	}
-	required := []string{"instrument_token", "tradingsymbol", "name", "expiry", "strike", "instrument_type", "exchange", "lot_size"}
+	required := []string{"instrument_token", "tradingsymbol", "name", "expiry", "strike", "instrument_type", "exchange", "segment", "lot_size"}
 	for _, c := range required {
 		if _, ok := col[c]; !ok {
 			return idx, errors.New("kite instruments CSV missing column: " + c)
@@ -81,6 +103,12 @@ func parseInstruments(r io.Reader) (instrumentIndex, error) {
 			return idx, err
 		}
 		exchange := rec[col["exchange"]]
+		// Searchable cash instruments (NSE EQ + indices) go in the
+		// search slice; everything below is the index-options path.
+		if row, ok := searchableRow(rec, col, exchange); ok {
+			idx.search = append(idx.search, row)
+			continue
+		}
 		if exchange != "NFO" && exchange != "BFO" {
 			continue
 		}
@@ -123,6 +151,40 @@ func parseInstruments(r io.Reader) (instrumentIndex, error) {
 		idx.bySymbol[exchange+":"+ins.TradingSymbol] = tok
 	}
 	return idx, nil
+}
+
+// searchableRow classifies one CSV record as a searchable cash
+// instrument. Returns ok=false for anything that isn't an NSE equity
+// or an NSE/BSE index — those rows fall through to the options path.
+func searchableRow(rec []string, col map[string]int, exchange string) (searchRow, bool) {
+	segment := rec[col["segment"]]
+	instrType := rec[col["instrument_type"]]
+	var kind string
+	switch {
+	case segment == "INDICES" && (exchange == "NSE" || exchange == "BSE"):
+		kind = "INDEX"
+	case exchange == "NSE" && segment == "NSE" && instrType == "EQ":
+		kind = "EQ"
+	default:
+		return searchRow{}, false
+	}
+	tok, err := strconv.ParseInt(rec[col["instrument_token"]], 10, 64)
+	if err != nil {
+		return searchRow{}, false
+	}
+	lotSize, _ := strconv.Atoi(rec[col["lot_size"]])
+	sym := rec[col["tradingsymbol"]]
+	name := rec[col["name"]]
+	return searchRow{
+		Token:         tok,
+		Exchange:      exchange,
+		TradingSymbol: sym,
+		Name:          name,
+		Kind:          kind,
+		LotSize:       lotSize,
+		symU:          strings.ToUpper(sym),
+		nameU:         strings.ToUpper(name),
+	}, true
 }
 
 // parseExpiry handles Kite's date format. They use 2006-01-02 in the
@@ -208,6 +270,74 @@ func (idx *instrumentIndex) OptionInstruments(u provider.Underlying, expiry time
 func (idx *instrumentIndex) TokenForSymbol(sym string) (int64, bool) {
 	tok, ok := idx.bySymbol[sym]
 	return tok, ok
+}
+
+// maxSearchResults is the hard cap on SearchInstruments results,
+// regardless of the limit the caller asks for.
+const maxSearchResults = 50
+
+// SearchInstruments implements provider.InstrumentSearcher against the
+// in-memory instruments cache — no network call once the cache is warm
+// (ensureInstruments refreshes it every 12h).
+//
+// Matching is case-insensitive over tradingsymbol and name; prefix
+// matches rank above contains matches, alphabetical by symbol within
+// each rank. Only NSE equities and indices are searchable (see
+// searchableRow). limit is clamped to (0, maxSearchResults].
+func (p *Provider) SearchInstruments(ctx context.Context, query string, limit int) ([]provider.Instrument, error) {
+	if err := p.ensureInstruments(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > maxSearchResults {
+		limit = maxSearchResults
+	}
+	p.instrumentsMu.RLock()
+	defer p.instrumentsMu.RUnlock()
+	return p.instruments.Search(query, limit), nil
+}
+
+// Search scans the searchable rows for query. See SearchInstruments
+// for the ranking contract. An empty/whitespace query returns nil —
+// we never dump the whole universe.
+func (idx *instrumentIndex) Search(query string, limit int) []provider.Instrument {
+	q := strings.ToUpper(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	var prefix, contains []searchRow
+	for _, r := range idx.search {
+		switch {
+		case strings.HasPrefix(r.symU, q) || strings.HasPrefix(r.nameU, q):
+			prefix = append(prefix, r)
+		case strings.Contains(r.symU, q) || strings.Contains(r.nameU, q):
+			contains = append(contains, r)
+		}
+	}
+	bySymbol := func(rows []searchRow) {
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].TradingSymbol != rows[j].TradingSymbol {
+				return rows[i].TradingSymbol < rows[j].TradingSymbol
+			}
+			return rows[i].Exchange < rows[j].Exchange
+		})
+	}
+	bySymbol(prefix)
+	bySymbol(contains)
+	out := make([]provider.Instrument, 0, limit)
+	for _, r := range append(prefix, contains...) {
+		if len(out) == limit {
+			break
+		}
+		out = append(out, provider.Instrument{
+			Symbol:   r.TradingSymbol,
+			Name:     r.Name,
+			Exchange: r.Exchange,
+			Kind:     r.Kind,
+			LotSize:  r.LotSize,
+			Token:    strconv.FormatInt(r.Token, 10),
+		})
+	}
+	return out
 }
 
 // underlyingName converts our Underlying enum into Kite's `name` field.

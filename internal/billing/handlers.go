@@ -55,8 +55,8 @@ func NewHandler(store *Store, client *Client, planID, planIDPlus string, logger 
 func (h *Handler) requireNoActivePremium(w http.ResponseWriter, r *http.Request, uid uuid.UUID) bool {
 	existing, err := h.store.CurrentSubscription(r.Context(), uid)
 	if err != nil {
-		h.logger.Error("check existing subscription", "err", err, "user_id", uid)
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("check existing subscription failed", "err", err, "user_id", uid, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return false
 	}
 	if existing == nil || existing.CancelAtPeriodEnd {
@@ -111,8 +111,8 @@ func (h *Handler) CheckoutSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.store.CreatePendingRecurring(r.Context(), uid, sub.ID, PremiumMonthlyPaise, "standard"); err != nil {
-		h.logger.Error("persist pending recurring", "err", err)
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("persist pending recurring failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 
@@ -154,8 +154,8 @@ func (h *Handler) CheckoutSubscriptionPlus(w http.ResponseWriter, r *http.Reques
 	}
 
 	if _, err := h.store.CreatePendingRecurring(r.Context(), uid, sub.ID, PremiumPlusPaise, "plus"); err != nil {
-		h.logger.Error("persist pending plus recurring", "err", err)
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("persist pending plus recurring failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 
@@ -193,8 +193,8 @@ func (h *Handler) CheckoutPremiumPass(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.store.CreatePendingOneTime(r.Context(), uid, order.ID, PremiumMonthlyPaise); err != nil {
-		h.logger.Error("persist pending one_time", "err", err)
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("persist pending one_time failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 
@@ -278,7 +278,8 @@ func (h *Handler) CancelSubscription(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusNotFound, "not_found", "subscription not found")
 			return
 		}
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("load subscription failed", "err", err, "sub_id", subID, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	if row.Kind != "recurring" {
@@ -296,8 +297,8 @@ func (h *Handler) CancelSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.MarkCancelAtPeriodEnd(r.Context(), uid, subID); err != nil {
-		h.logger.Error("mark cancel at period end", "err", err, "sub_id", subID)
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("mark cancel at period end failed", "err", err, "sub_id", subID, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -311,17 +312,20 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	sub, err := h.store.CurrentSubscription(r.Context(), uid)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("load current subscription failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	balance, err := h.store.CreditsBalance(r.Context(), uid)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("load credits balance failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	activity, err := h.store.RecentActivity(r.Context(), uid, 6)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.logger.Error("load recent activity failed", "err", err, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 

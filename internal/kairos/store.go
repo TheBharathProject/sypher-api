@@ -375,6 +375,141 @@ func (s *Store) ChainAtTime(ctx context.Context, u provider.Underlying, expiry, 
 	return out, rows.Err()
 }
 
+// utcDayBounds returns the [start, end) of t's UTC calendar day.
+// The chain table has no snapshot_date column (partition key is the
+// timestamptz itself — see migration 0025), so "on date D" queries are
+// expressed as an explicit UTC half-open range. IST market hours
+// (09:15–15:30 = 03:45–10:00 UTC) always fall inside one UTC day, so
+// this matches the trading day. Explicit bounds also keep partition
+// pruning, which a ::date cast would defeat.
+func utcDayBounds(t time.Time) (time.Time, time.Time) {
+	u := t.UTC()
+	start := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+	return start, start.AddDate(0, 0, 1)
+}
+
+// ChainAt returns the chain rows at the latest snapshot_time <= ts on
+// ts's date, plus that snapshot time — the time-machine variant of
+// LatestChain. Unlike ChainAtTime (the backtester's lookup, which walks
+// back arbitrarily far), this never crosses a day boundary: scrubbing
+// to 09:16 must not silently serve yesterday's close.
+//
+// Same no-data convention as LatestChain: nil rows, zero time, nil err.
+func (s *Store) ChainAt(ctx context.Context, u provider.Underlying, expiry, ts time.Time) ([]provider.ChainRow, time.Time, error) {
+	dayStart, _ := utcDayBounds(ts)
+	var snapshot *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT MAX(snapshot_time)
+		FROM kairos.option_chains
+		WHERE underlying = $1 AND expiry_date = $2
+		  AND snapshot_time >= $3 AND snapshot_time <= $4
+	`, string(u), expiry, dayStart, ts).Scan(&snapshot)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, time.Time{}, nil
+		}
+		return nil, time.Time{}, err
+	}
+	if snapshot == nil {
+		return nil, time.Time{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT underlying, expiry_date, strike, option_type, snapshot_time,
+		       COALESCE(spot, 0), COALESCE(ltp, 0), COALESCE(bid, 0), COALESCE(ask, 0),
+		       COALESCE(oi, 0), COALESCE(oi_change, 0), COALESCE(volume, 0)
+		FROM kairos.option_chains
+		WHERE underlying = $1 AND expiry_date = $2 AND snapshot_time = $3
+		ORDER BY strike ASC, option_type ASC
+	`, string(u), expiry, *snapshot)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer rows.Close()
+	var out []provider.ChainRow
+	for rows.Next() {
+		var r provider.ChainRow
+		var und, optType string
+		if err := rows.Scan(&und, &r.ExpiryDate, &r.Strike, &optType, &r.SnapshotTime,
+			&r.Spot, &r.LTP, &r.Bid, &r.Ask, &r.OI, &r.OIChange, &r.Volume); err != nil {
+			return nil, time.Time{}, err
+		}
+		r.Underlying = provider.Underlying(und)
+		r.OptionType = provider.OptionType(optType)
+		out = append(out, r)
+	}
+	return out, *snapshot, rows.Err()
+}
+
+// SnapshotTimes returns every distinct snapshot_time recorded for an
+// underlying on a calendar date, ascending — the FE's time-machine
+// scrubber positions. No expiry filter: a snapshot tick covers all
+// expiries at once, so any expiry's rows share the same times.
+func (s *Store) SnapshotTimes(ctx context.Context, u provider.Underlying, date time.Time) ([]time.Time, error) {
+	dayStart, dayEnd := utcDayBounds(date)
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT snapshot_time
+		FROM kairos.option_chains
+		WHERE underlying = $1 AND snapshot_time >= $2 AND snapshot_time < $3
+		ORDER BY 1
+	`, string(u), dayStart, dayEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var t time.Time
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// DaySnapshots returns one DaySnapshot per snapshot tick for an
+// (underlying, expiry) on a date, ascending by time — the input to
+// intraday analytics (PCR / max-pain / spot series). Rows are fetched
+// flat in one query and grouped in Go; per-snapshot spot is taken from
+// the first row carrying a non-zero spot.
+func (s *Store) DaySnapshots(ctx context.Context, u provider.Underlying, expiry, date time.Time) ([]DaySnapshot, error) {
+	dayStart, dayEnd := utcDayBounds(date)
+	rows, err := s.pool.Query(ctx, `
+		SELECT snapshot_time, COALESCE(spot, 0), strike, option_type,
+		       COALESCE(ltp, 0), COALESCE(oi, 0)
+		FROM kairos.option_chains
+		WHERE underlying = $1 AND expiry_date = $2
+		  AND snapshot_time >= $3 AND snapshot_time < $4
+		ORDER BY snapshot_time ASC, strike ASC, option_type ASC
+	`, string(u), expiry, dayStart, dayEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DaySnapshot
+	for rows.Next() {
+		var (
+			ts      time.Time
+			spot    float64
+			row     DayChainRow
+			optType string
+		)
+		if err := rows.Scan(&ts, &spot, &row.Strike, &optType, &row.LTP, &row.OI); err != nil {
+			return nil, err
+		}
+		row.OptionType = provider.OptionType(optType)
+		if len(out) == 0 || !out[len(out)-1].TS.Equal(ts) {
+			out = append(out, DaySnapshot{TS: ts})
+		}
+		snap := &out[len(out)-1]
+		if snap.Spot == 0 && spot != 0 {
+			snap.Spot = spot
+		}
+		snap.Rows = append(snap.Rows, row)
+	}
+	return out, rows.Err()
+}
+
 // CountBacktestsLast24h is used for the free-tier rate limit
 // (ADR-0010 D7).
 func (s *Store) CountBacktestsLast24h(ctx context.Context, uid uuid.UUID) (int64, error) {

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -38,9 +39,9 @@ const apiTokenPrefix = "pg_"
 // the allow-list check for those (existing behavior).
 var scopeRouteAllowlist = map[string]map[string]bool{
 	"extension:capture": {
-		"GET /job-tracker/me":                          true,
-		"GET /job-tracker/applications/check-link":     true,
-		"POST /job-tracker/applications":               true,
+		"GET /job-tracker/me":                      true,
+		"GET /job-tracker/applications/check-link": true,
+		"POST /job-tracker/applications":           true,
 	},
 }
 
@@ -120,6 +121,31 @@ func RequireUser(secret, issuer, audience string, store *Store) func(http.Handle
 			ctx = context.WithValue(ctx, ctxKeyEmail, email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+// RequireAdmin composes an existing RequireUser middleware with an
+// is_admin check (migration 0026): the request must carry a valid user
+// token AND that user must hold the platform admin flag, else 403
+// admin_required. The flag is read from the DB per request — admin
+// traffic is tiny, and a fresh read means revoking admin takes effect
+// immediately instead of at JWT expiry.
+func RequireAdmin(requireUser func(http.Handler) http.Handler, store *Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uid := MustUserID(r.Context())
+			ok, err := store.IsAdmin(r.Context(), uid)
+			if err != nil {
+				slog.Error("admin check", "user_id", uid, "err", err)
+				httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+				return
+			}
+			if !ok {
+				httpx.WriteError(w, http.StatusForbidden, "admin_required", "admin access required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
 	}
 }
 

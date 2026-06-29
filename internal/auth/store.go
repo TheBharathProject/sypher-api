@@ -24,12 +24,12 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // userCols is the canonical column projection for auth.users — keep it in
 // one place so adding/renaming columns (like the 0009 premium fields) is a
 // single edit. Order MUST match scanUser below.
-const userCols = `id, google_id, email, name, COALESCE(picture_url, ''), timezone, is_premium, email_notifications_enabled`
+const userCols = `id, google_id, email, name, COALESCE(picture_url, ''), timezone, is_premium, is_admin, email_notifications_enabled`
 
 func scanUser(row pgx.Row, u *User) error {
 	return row.Scan(
 		&u.ID, &u.GoogleID, &u.Email, &u.Name, &u.PictureURL, &u.Timezone,
-		&u.IsPremium, &u.EmailNotificationsEnabled,
+		&u.IsPremium, &u.IsAdmin, &u.EmailNotificationsEnabled,
 	)
 }
 
@@ -78,6 +78,62 @@ func (s *Store) CanReceiveEmail(ctx context.Context, id uuid.UUID) (bool, error)
 		return false, nil
 	}
 	return ok, err
+}
+
+// IsAdmin reports whether the user holds the platform admin flag
+// (migration 0026). Returns (false, nil) on pgx.ErrNoRows so a deleted
+// user fails closed without bubbling the error — same posture as
+// CanReceiveEmail above.
+func (s *Store) IsAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
+	const q = `SELECT is_admin FROM auth.users WHERE id = $1`
+	var ok bool
+	err := s.pool.QueryRow(ctx, q, id).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return ok, err
+}
+
+// SetUserFlags partially updates the operator-controlled flags. Nil
+// pointers leave the corresponding column untouched (COALESCE), so a
+// caller can flip is_admin without knowing is_premium and vice versa.
+// Returns pgx.ErrNoRows if the user doesn't exist.
+func (s *Store) SetUserFlags(ctx context.Context, id uuid.UUID, isPremium, isAdmin *bool) error {
+	const q = `
+		UPDATE auth.users
+		SET is_premium = COALESCE($2, is_premium),
+			is_admin = COALESCE($3, is_admin),
+			updated_at = NOW()
+		WHERE id = $1
+	`
+	tag, err := s.pool.Exec(ctx, q, id, isPremium, isAdmin)
+	if err != nil {
+		return fmt.Errorf("set user flags: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateProfile partially updates the user-editable profile fields
+// (PATCH /auth/me). Nil pointers leave the corresponding column
+// untouched (COALESCE). Returns the refreshed User so the handler can
+// echo it without a second SELECT, or pgx.ErrNoRows if the user is gone.
+func (s *Store) UpdateProfile(ctx context.Context, id uuid.UUID, name, timezone *string, emailNotificationsEnabled *bool) (*User, error) {
+	q := `
+		UPDATE auth.users
+		SET name = COALESCE($2, name),
+			timezone = COALESCE($3, timezone),
+			email_notifications_enabled = COALESCE($4, email_notifications_enabled),
+			updated_at = NOW()
+		WHERE id = $1
+		RETURNING ` + userCols
+	var u User
+	if err := scanUser(s.pool.QueryRow(ctx, q, id, name, timezone, emailNotificationsEnabled), &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // SetEmailPref flips the per-user opt-in. Only callable for premium

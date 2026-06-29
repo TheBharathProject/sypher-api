@@ -89,6 +89,13 @@ func (p *Pool) Enqueue(id uuid.UUID) bool {
 	}
 }
 
+// Depth reports how many backtest ids are currently buffered on the
+// worker channel — the admin health page's "queue depth" card. A point-
+// in-time read; jobs already claimed by a worker don't count.
+func (p *Pool) Depth() int {
+	return len(p.ch)
+}
+
 // Stop closes the channel and waits for workers to finish their
 // current job. Called by server.Stop.
 func (p *Pool) Stop() {
@@ -139,16 +146,8 @@ func (p *Pool) runJob(ctx context.Context, id uuid.UUID) {
 // Simulation
 // ─────────────────────────────────────────────────────────────────────────
 
-// Cost model constants (Indian options, sell-side STT + brokerage).
-const (
-	sttPctSell       = 0.0625 / 100.0 // 0.0625% STT on sell-side premium
-	exchangeFeePct   = 0.000345       // 0.0345% (approximation across NSE/BSE)
-	sebiTurnoverPct  = 0.000010       // 0.0001% turnover charge
-	gstOnFeesPct     = 0.18           // 18% GST on (brokerage + exchange + SEBI)
-	brokerageFlat    = 20.0           // ₹20 / executed order (Zerodha-style)
-	slippageTicks    = 1              // 1-tick slippage per fill
-	tickSize         = 0.05           // ₹0.05 per tick (standard for NSE options)
-)
+// Cost model constants live in costs.go (shared with the paper-trading
+// engine); see ComputeOrderCosts, SlippageTicks, TickSize.
 
 // lotSizes mirror handler.go's lookups; duplicated here so simulation
 // is self-contained.
@@ -268,13 +267,13 @@ func (p *Pool) simulate(ctx context.Context, bt *Backtest) (*BacktestResult, err
 			entryFill := entryRow.LTP
 			exitFill := exitRow.LTP
 			if leg.Side == "BUY" {
-				entryFill += slippageTicks * tickSize
-				exitFill -= slippageTicks * tickSize
+				entryFill += SlippageTicks * TickSize
+				exitFill -= SlippageTicks * TickSize
 				entryPrem -= entryFill * float64(leg.Lots) * float64(lotSize)
 				exitPrem -= exitFill * float64(leg.Lots) * float64(lotSize)
 			} else {
-				entryFill -= slippageTicks * tickSize
-				exitFill += slippageTicks * tickSize
+				entryFill -= SlippageTicks * TickSize
+				exitFill += SlippageTicks * TickSize
 				entryPrem += entryFill * float64(leg.Lots) * float64(lotSize)
 				exitPrem += exitFill * float64(leg.Lots) * float64(lotSize)
 			}
@@ -367,9 +366,10 @@ func findRow(rows []provider.ChainRow, strike int, optType provider.OptionType) 
 	return nil
 }
 
-// computeCosts applies STT + brokerage + exchange + SEBI + GST.
-// Costs are approximate; real Zerodha varies a few rupees per trade
-// from these numbers but the order of magnitude is correct.
+// computeCosts applies STT + brokerage + exchange + SEBI + GST via the
+// shared per-order model in costs.go. Each leg executes two orders
+// (entry + exit); the exit order takes the opposite side, so a SELL leg
+// pays STT on its entry fill and a BUY leg on its exit fill.
 func computeCosts(legs []Leg, lotSize int, entry, exit []provider.ChainRow, atm int) float64 {
 	totalCost := 0.0
 	for _, l := range legs {
@@ -380,28 +380,13 @@ func computeCosts(legs []Leg, lotSize int, entry, exit []provider.ChainRow, atm 
 			continue
 		}
 		qty := float64(l.Lots * lotSize)
-		// Sell-side STT on premium (paid on the sell of the contract).
-		var sttTurnover float64
+		entrySide, exitSide := "BUY", "SELL"
 		if l.Side == "SELL" {
-			sttTurnover = eRow.LTP * qty
-		} else {
-			sttTurnover = xRow.LTP * qty
+			entrySide, exitSide = "SELL", "BUY"
 		}
-		stt := sttTurnover * sttPctSell
-
-		// Exchange + SEBI: applied on both legs (entry + exit).
-		turnover := (eRow.LTP + xRow.LTP) * qty
-		exch := turnover * exchangeFeePct
-		sebi := turnover * sebiTurnoverPct
-
-		// Brokerage: flat ₹20 per executed order. Two orders per leg
-		// (entry + exit), so ₹40/leg.
-		brokerage := 2.0 * brokerageFlat
-
-		// GST on (brokerage + exchange + SEBI).
-		gst := (brokerage + exch + sebi) * gstOnFeesPct
-
-		totalCost += stt + exch + sebi + brokerage + gst
+		ec := ComputeOrderCosts(OrderCosts{Side: entrySide, Premium: eRow.LTP, Qty: qty})
+		xc := ComputeOrderCosts(OrderCosts{Side: exitSide, Premium: xRow.LTP, Qty: qty})
+		totalCost += ec.Total + xc.Total
 	}
 	return totalCost
 }

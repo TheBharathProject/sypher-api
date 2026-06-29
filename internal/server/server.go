@@ -20,6 +20,7 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
 	"github.com/TheBharathProject/sypher-api/internal/kairos"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/marketdata"
 	"github.com/TheBharathProject/sypher-api/internal/kairos/provider"
 	"github.com/TheBharathProject/sypher-api/internal/mailer"
 	"github.com/TheBharathProject/sypher-api/internal/storage"
@@ -106,6 +107,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /auth/google/callback", authHandler.GoogleCallback)
 	mux.HandleFunc("POST /auth/logout", authHandler.Logout)
 	mux.Handle("GET /auth/me", requireUser(http.HandlerFunc(authHandler.CurrentUser)))
+	mux.Handle("PATCH /auth/me", requireUser(http.HandlerFunc(authHandler.UpdateMe)))
 
 	// Phase 2: best-effort init of R2 + Deepseek. If creds aren't set, the
 	// related endpoints respond 503 instead of refusing to boot.
@@ -187,18 +189,33 @@ func (s *Server) routes() http.Handler {
 	// worker, and routes around the interface.
 	//
 	// If provider construction fails (typo'd KAIROS_DATA_PROVIDER, e.g.),
-	// boot continues — the kairos endpoints just respond 503 and the
-	// rest of sypher-api (auth, jobtracker, billing) stays up.
+	// boot continues — the kairos routes are simply not registered (the
+	// mux 404s them) and the rest of sypher-api (auth, jobtracker,
+	// billing) stays up.
 	// ─────────────────────────────────────────────────────────────────
 	kairosStore := kairos.NewStore(s.pool)
+	// requireAdmin stacks the platform is_admin check (migration 0026)
+	// on top of requireUser — used for /kairos/admin/*.
+	requireAdmin := auth.RequireAdmin(requireUser, authStore)
 	var kairosProvider provider.BrokerProvider
+	var kairosMarketData *marketdata.Service
 	if p, kerr := provider.NewProvider(s.cfg, s.pool, s.logger); kerr != nil {
-		s.logger.Error("kairos provider init failed; kairos endpoints will return 503", "err", kerr)
+		s.logger.Error("kairos provider init failed; kairos routes not registered", "err", kerr)
 	} else {
 		kairosProvider = p
 		s.kairosWorker = kairos.NewPool(kairosStore, kairosProvider, s.logger)
-		kairosHandler := kairos.NewHandler(s.cfg, kairosStore, kairosProvider, s.kairosWorker, s.logger)
-		kairos.RegisterRoutes(mux, kairosHandler, requireUser)
+
+		// Market data — cached quotes/candles/movers on top of the same
+		// provider. Shared by its own /kairos/marketdata/* routes, the
+		// screener's live-price merge, and the alerts/paper crons below.
+		kairosMarketData = marketdata.NewService(kairosProvider, s.logger)
+		mdHandler := marketdata.NewHandler(kairosMarketData, s.logger)
+		marketdata.RegisterRoutes(mux, mdHandler, requireUser)
+
+		kairosHandler := kairos.NewHandler(s.cfg, kairosStore, kairosProvider, s.kairosWorker, s.logger).
+			WithAuthStore(authStore).        // premium gate + admin user endpoints
+			WithMarketData(kairosMarketData) // screener live-price merge
+		kairos.RegisterRoutes(mux, kairosHandler, requireUser, requireAdmin)
 	}
 
 	urls := jobs.NewURLBuilder(s.cfg)
@@ -241,8 +258,27 @@ func (s *Server) routes() http.Handler {
 				NextFire: jobs.EveryN(60 * time.Second),
 				Run:      jobs.KairosBacktestSweep(kairosStore, s.kairosWorker.Enqueue, s.logger),
 			},
+			cron.Job{
+				Name:     "kairos-alerts",
+				NextFire: jobs.EveryN(60 * time.Second),
+				Run:      jobs.KairosAlertsSweep(kairosStore, kairosMarketData, mailerClient, s.logger),
+			},
+			cron.Job{
+				Name:     "kairos-paper-sweep",
+				NextFire: jobs.EveryN(60 * time.Second),
+				Run:      jobs.KairosPaperSweep(kairosStore, kairosMarketData.Quotes, s.logger),
+			},
 		)
 	}
+	// kairos-announcements needs no provider — the NSE feed is public and
+	// the job only touches the store (see cmd/cron-once) — so it registers
+	// whenever the DB-backed kairos store exists, even when provider init
+	// failed above.
+	cronJobs = append(cronJobs, cron.Job{
+		Name:     "kairos-announcements",
+		NextFire: jobs.EveryN(10 * time.Minute),
+		Run:      jobs.KairosAnnouncements(kairosStore, kairos.NewNSEClient(), s.logger),
+	})
 	s.cron = cron.New(s.logger, cronJobs...)
 
 	// Billing routes — auth-gated (premium is per-user) except the
@@ -266,12 +302,15 @@ func (s *Server) routes() http.Handler {
 
 	// Compose middleware. Outer wrappers run first.
 	// Path-keyed rate limiting sits inside CORS/logging so it can read
-	// the authenticated user from the request context.
+	// the authenticated user from the request context. Request-ID sits
+	// just inside recover so even panicking requests carry an ID on the
+	// response (and in the panic log).
 	var h http.Handler = mux
 	h = withPathRateLimit(h, aiRL, "/job-tracker/ai/", "/billing/checkout/")
 	h = withPathRateLimit(h, importRL, "/job-tracker/applications/import")
 	h = withCORS(h, s.cfg.CORSOrigins)
 	h = withLogging(h, s.logger)
+	h = withRequestID(h)
 	h = withRecover(h, s.logger)
 	return h
 }

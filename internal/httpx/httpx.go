@@ -7,11 +7,30 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 )
+
+// ctxKeyRequestID is unexported so callers can't accidentally collide on
+// the type (Go requires the *type identity* to match, not just the value).
+type ctxKeyRequestID struct{}
+
+// WithRequestID returns a copy of ctx carrying the request ID. Stamped by
+// the server's withRequestID middleware; handlers read it back via
+// RequestID for error-log correlation.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxKeyRequestID{}, id)
+}
+
+// RequestID returns the request ID stamped on ctx, or "" when none was
+// set (tests, cron-driven contexts).
+func RequestID(ctx context.Context) string {
+	id, _ := ctx.Value(ctxKeyRequestID{}).(string)
+	return id
+}
 
 // ErrorBody is the canonical shape of an error response body.
 // Keeping the struct exported means clients (and tests) can unmarshal into it.

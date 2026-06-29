@@ -7,9 +7,18 @@
 //	go run ./cmd/cron-once stale-apps
 //	go run ./cmd/cron-once daily-digest
 //	go run ./cmd/cron-once expire-one-time-premium
+//	go run ./cmd/cron-once fire-reminders
+//	go run ./cmd/cron-once kairos-options-snapshot
+//	go run ./cmd/cron-once kairos-create-partitions
+//	go run ./cmd/cron-once kairos-backtest-sweep
+//	go run ./cmd/cron-once kairos-alerts
+//	go run ./cmd/cron-once kairos-paper-sweep
+//	go run ./cmd/cron-once kairos-announcements
 //
 // Reads the same env vars as cmd/api (DATABASE_URL, RESEND_API_KEY, etc).
 // Skip RESEND_API_KEY to dry-run the email leg via the slog mailer.
+// The kairos-* jobs additionally need KAIROS_DATA_PROVIDER (and that
+// provider's credentials) — same gating as server.routes().
 package main
 
 import (
@@ -25,14 +34,22 @@ import (
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/cron/jobs"
 	"github.com/TheBharathProject/sypher-api/internal/jobtracker"
+	"github.com/TheBharathProject/sypher-api/internal/kairos"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/marketdata"
+	"github.com/TheBharathProject/sypher-api/internal/kairos/provider"
 	"github.com/TheBharathProject/sypher-api/internal/mailer"
 )
+
+// jobNames is the usage string — keep in sync with the switch in main.
+const jobNames = "stale-apps|daily-digest|expire-one-time-premium|fire-reminders|" +
+	"kairos-options-snapshot|kairos-create-partitions|kairos-backtest-sweep|" +
+	"kairos-alerts|kairos-paper-sweep|kairos-announcements"
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cron-once <stale-apps|daily-digest|expire-one-time-premium>")
+		fmt.Fprintf(os.Stderr, "usage: cron-once <%s>\n", jobNames)
 		os.Exit(2)
 	}
 	jobName := os.Args[1]
@@ -60,6 +77,20 @@ func main() {
 	n := jobtracker.NewNotifier(store, m, logger)
 	urls := jobs.NewURLBuilder(cfg)
 
+	// Kairos deps, mirroring server.routes(): the kairos cron jobs are
+	// only registered there when the data provider boots. The
+	// long-running api degrades to 503s on provider failure; this
+	// binary exists to exercise a job, so a provider that won't boot is
+	// a hard error with a pointer at the likely cause.
+	newKairosDeps := func() (*kairos.Store, provider.BrokerProvider) {
+		kprov, perr := provider.NewProvider(cfg, pool, logger)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "kairos provider init failed: %v\n(check KAIROS_DATA_PROVIDER and the provider's credentials — same env as cmd/api)\n", perr)
+			os.Exit(1)
+		}
+		return kairos.NewStore(pool), kprov
+	}
+
 	var run func(context.Context) error
 	switch jobName {
 	case "stale-apps":
@@ -68,8 +99,39 @@ func main() {
 		run = jobs.DailyApplicationDigest(store, n, m, urls, logger)
 	case "expire-one-time-premium":
 		run = jobs.ExpireOneTimePremium(billing.NewStore(pool), logger)
+	case "fire-reminders":
+		run = jobs.FireDueReminders(store, n, logger)
+	case "kairos-options-snapshot":
+		kstore, kprov := newKairosDeps()
+		run = jobs.KairosOptionsSnapshot(kstore, kprov, logger)
+	case "kairos-create-partitions":
+		kstore, _ := newKairosDeps()
+		run = jobs.KairosCreatePartitions(kstore, logger)
+	case "kairos-backtest-sweep":
+		kstore, kprov := newKairosDeps()
+		// Same construction as server.routes(): the sweep enqueues onto
+		// a worker pool. The pool is deliberately NOT started here —
+		// the code path under test is SELECT-pending + enqueue, and a
+		// started pool would be killed mid-backtest when this one-shot
+		// process exits. Rows stay 'pending' for the live api to claim.
+		kpool := kairos.NewPool(kstore, kprov, logger)
+		run = jobs.KairosBacktestSweep(kstore, kpool.Enqueue, logger)
+	case "kairos-alerts":
+		// Same construction as server.routes(): one marketdata.Service on
+		// top of the active provider feeds the batched quotes call.
+		kstore, kprov := newKairosDeps()
+		md := marketdata.NewService(kprov, logger)
+		run = jobs.KairosAlertsSweep(kstore, md, m, logger)
+	case "kairos-paper-sweep":
+		kstore, kprov := newKairosDeps()
+		md := marketdata.NewService(kprov, logger)
+		run = jobs.KairosPaperSweep(kstore, md.Quotes, logger)
+	case "kairos-announcements":
+		// No provider needed — the NSE feed is public and the job only
+		// touches the store, so don't gate on KAIROS_DATA_PROVIDER here.
+		run = jobs.KairosAnnouncements(kairos.NewStore(pool), kairos.NewNSEClient(), logger)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown job: %s (expected stale-apps|daily-digest|expire-one-time-premium)\n", jobName)
+		fmt.Fprintf(os.Stderr, "unknown job: %s (expected %s)\n", jobName, jobNames)
 		os.Exit(2)
 	}
 

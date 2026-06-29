@@ -11,6 +11,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	// Embed the IANA timezone database in the binary. The runtime image is
+	// bare alpine (no tzdata package) and the binary is CGO_ENABLED=0, so
+	// without this time.LoadLocation fails for every zone in production —
+	// e.g. the timezone validation in PATCH /auth/me would 400 on valid
+	// names. With the embed, LoadLocation works regardless of the host's
+	// /usr/share/zoneinfo.
+	_ "time/tzdata"
+
 	"github.com/TheBharathProject/sypher-api/internal/config"
 	"github.com/TheBharathProject/sypher-api/internal/db"
 	"github.com/TheBharathProject/sypher-api/internal/server"

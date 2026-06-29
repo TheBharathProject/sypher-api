@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/TheBharathProject/sypher-api/internal/httpx"
 )
 
@@ -16,7 +18,7 @@ import (
 // another http.Handler. Composition is plain function-of-function calls;
 // no "decorator" mechanism is needed.
 //
-//   final := withRecover(withLogging(withCORS(mux, origins), logger), logger)
+//   final := withRecover(withRequestID(withLogging(withCORS(mux, origins), logger)), logger)
 //
 // Order matters — the outermost wrapper sees the request first.
 
@@ -26,15 +28,36 @@ func withRecover(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// withRequestID sits just inside us and sets the response
+				// header before any handler runs, so reading it back here
+				// gives us the ID even though our r predates the context
+				// value.
 				logger.Error("panic in handler",
 					"err", rec,
 					"path", r.URL.Path,
+					"request_id", w.Header().Get("X-Request-ID"),
 					"stack", string(debug.Stack()),
 				)
 				httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 			}
 		}()
 		next.ServeHTTP(w, r)
+	})
+}
+
+// withRequestID tags every request with an ID — an inbound X-Request-ID
+// header is honoured (so upstream proxies/clients can correlate), else we
+// mint a UUID. The ID is echoed on the response header and stashed in the
+// request context so handlers can include it in error logs via
+// httpx.RequestID.
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			id = uuid.NewString()
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r.WithContext(httpx.WithRequestID(r.Context(), id)))
 	})
 }
 
@@ -51,6 +74,7 @@ func withLogging(next http.Handler, logger *slog.Logger) http.Handler {
 			"status", rec.status,
 			"duration_ms", strconv.FormatInt(time.Since(start).Milliseconds(), 10),
 			"remote", httpx.ClientIP(r),
+			"request_id", httpx.RequestID(r.Context()),
 		)
 	})
 }

@@ -94,8 +94,22 @@ CREATE TABLE IF NOT EXISTS job_tracker.profile_experiences (
   ordinal   INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS profile_experiences_user_idx
-  ON job_tracker.profile_experiences (user_id, ordinal);
+-- Guarded: 0006_field_alignment.sql renames "ordinal" to "sort_order" on this
+-- table. The rename carries the existing index over to the new column, so on
+-- re-runs against an up-to-date schema the index already exists in its
+-- superseded (user_id, sort_order) form — but Postgres resolves index columns
+-- BEFORE the IF NOT EXISTS name check, so an unguarded statement errors with
+-- 'column "ordinal" does not exist'. On a fresh DB the column exists at
+-- 0003-time and the index is created exactly as before.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='job_tracker' AND table_name='profile_experiences' AND column_name='ordinal'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS profile_experiences_user_idx
+      ON job_tracker.profile_experiences (user_id, ordinal);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS job_tracker.profile_educations (
   id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -106,8 +120,16 @@ CREATE TABLE IF NOT EXISTS job_tracker.profile_educations (
   ordinal   INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS profile_educations_user_idx
-  ON job_tracker.profile_educations (user_id, ordinal);
+-- Guarded: see profile_experiences_user_idx above (0006 renames ordinal).
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='job_tracker' AND table_name='profile_educations' AND column_name='ordinal'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS profile_educations_user_idx
+      ON job_tracker.profile_educations (user_id, ordinal);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS job_tracker.profile_projects (
   id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -117,8 +139,16 @@ CREATE TABLE IF NOT EXISTS job_tracker.profile_projects (
   ordinal   INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS profile_projects_user_idx
-  ON job_tracker.profile_projects (user_id, ordinal);
+-- Guarded: see profile_experiences_user_idx above (0006 renames ordinal).
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='job_tracker' AND table_name='profile_projects' AND column_name='ordinal'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS profile_projects_user_idx
+      ON job_tracker.profile_projects (user_id, ordinal);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS job_tracker.profile_skills (
   id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),

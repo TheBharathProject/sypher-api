@@ -149,8 +149,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	fresh, err := h.store.RecordEvent(r.Context(), ev.ID)
 	if err != nil {
-		h.logger.Error("webhook record event", "err", err, "event_id", ev.ID)
-		httpx.WriteError(w, http.StatusInternalServerError, "record_event", err.Error())
+		h.logger.Error("webhook record event failed", "err", err, "event_id", ev.ID, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 	if !fresh {
@@ -167,8 +167,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// reconciliation. We accept that operational reality for now;
 		// the alternative (rolling back processed_events on dispatch
 		// failure) opens up duplicate-event windows.
-		h.logger.Error("webhook dispatch failed", "err", err, "event", ev.Event, "event_id", ev.ID)
-		httpx.WriteError(w, http.StatusInternalServerError, "dispatch_failed", err.Error())
+		h.logger.Error("webhook dispatch failed", "err", err, "event", ev.Event, "event_id", ev.ID, "request_id", httpx.RequestID(r.Context()))
+		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
 		return
 	}
 

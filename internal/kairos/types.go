@@ -220,16 +220,62 @@ type Trade struct {
 // Chain wire format
 // ─────────────────────────────────────────────────────────────────────────
 
+// EnrichedChainRow is a stored ChainRow plus the greeks computed at
+// read time by internal/kairos/greeks (ADR-0009 D3 — greeks are never
+// persisted; this is the only place they're attached).
+//
+// Delta is abs() at the enrichment layer because chain-data.ts renders
+// both sides positive. IV is in percent (e.g. 18.42), matching the FE's
+// display convention; the greeks package itself works in fractions.
+type EnrichedChainRow struct {
+	provider.ChainRow
+	IV    float64 `json:"iv"`
+	Delta float64 `json:"delta"`
+	Gamma float64 `json:"gamma"`
+	Theta float64 `json:"theta"`
+	Vega  float64 `json:"vega"`
+}
+
 // ChainResponse is the JSON envelope returned by GET /kairos/options/chain.
 // Matches what kairos/app/options/chain-data.ts expects, plus the
 // staleness field per ADR-0013 D4.
 type ChainResponse struct {
-	Underlying       provider.Underlying  `json:"underlying"`
-	Spot             float64              `json:"spot"`
-	Expiry           string               `json:"expiry"`
-	SnapshotTime     time.Time            `json:"snapshot_time"`
-	StalenessSeconds int64                `json:"staleness_seconds"`
-	Rows             []provider.ChainRow  `json:"rows"`
+	Underlying       provider.Underlying `json:"underlying"`
+	Spot             float64             `json:"spot"`
+	Expiry           string              `json:"expiry"`
+	SnapshotTime     time.Time           `json:"snapshot_time"`
+	StalenessSeconds int64               `json:"staleness_seconds"`
+	Rows             []EnrichedChainRow  `json:"rows"`
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Intraday analytics types
+// ─────────────────────────────────────────────────────────────────────────
+
+// IntradayPoint is one ingest tick on the intraday analytics chart:
+// PCR and max pain at that snapshot, plus spot for the overlay line.
+type IntradayPoint struct {
+	TS      time.Time `json:"ts"`
+	PCR     float64   `json:"pcr"`
+	MaxPain int       `json:"maxPain"`
+	Spot    float64   `json:"spot"`
+}
+
+// DaySnapshot is one snapshot tick on a trading day, carrying only the
+// strike-level fields intraday analytics need. Produced by
+// Store.DaySnapshots, consumed by the IntradayAnalytics handler.
+type DaySnapshot struct {
+	TS   time.Time
+	Spot float64
+	Rows []DayChainRow
+}
+
+// DayChainRow is the per-(strike, side) slice of a DaySnapshot.
+type DayChainRow struct {
+	Strike     int
+	OptionType provider.OptionType
+	LTP        float64
+	OI         int64
 }
 
 // ProviderStatus is returned by GET /kairos/provider/status. The FE uses
