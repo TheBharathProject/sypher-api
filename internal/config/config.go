@@ -123,10 +123,10 @@ type Config struct {
 	KairosKiteAPIKey    string
 	KairosKiteAPISecret string
 
-	// Other providers are stubs (ADR-0011 D4). Their env vars are
-	// declared here so a future switch is just "fill these in"; until
-	// then they're inert.
+	// Other providers — env vars declared so a switch is config-only.
+	// Dhan: long-lived access token + client ID from developer.dhan.co.
 	KairosDhanAccessToken string
+	KairosDhanClientID    string
 
 	KairosUpstoxClientID     string
 	KairosUpstoxClientSecret string
@@ -249,6 +249,7 @@ func Load() (*Config, error) {
 		KairosKiteAPISecret: os.Getenv("KAIROS_KITE_API_SECRET"),
 
 		KairosDhanAccessToken: os.Getenv("KAIROS_DHAN_ACCESS_TOKEN"),
+		KairosDhanClientID:    os.Getenv("KAIROS_DHAN_CLIENT_ID"),
 
 		KairosUpstoxClientID:     os.Getenv("KAIROS_UPSTOX_CLIENT_ID"),
 		KairosUpstoxClientSecret: os.Getenv("KAIROS_UPSTOX_CLIENT_SECRET"),
